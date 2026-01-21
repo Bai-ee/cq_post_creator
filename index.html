@@ -27,7 +27,194 @@
   <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useCallback, useMemo, useEffect, useRef } = React;
+    const { useState, useCallback, useMemo, useEffect, useRef, createContext, useContext } = React;
+
+    // ============================================
+    // OPENAI API CONFIGURATION
+    // ============================================
+
+    const OpenAIContext = createContext(null);
+
+    const useOpenAI = () => useContext(OpenAIContext);
+
+    const SYSTEM_PROMPTS = {
+      strategyBuilder: `You are an expert X (Twitter) marketing strategist specializing in gaming and community building. You help create viral, algorithm-optimized posts for Critters Quest, an indie game.
+
+Key X Algorithm Knowledge:
+- Questions boost P(reply) by +12
+- "We/Our" community language boosts P(follow) by +8
+- Images add +15, Video adds +20 to engagement predictions
+- External links in main post reduce reach by ~30% - always suggest putting links in replies
+- 4+ hashtags triggers spam detection
+- Avoid: "guaranteed", "100x", "like if", "RT for", engagement bait
+- Optimal post length: 100-200 characters
+- First 15-30 minutes engagement velocity is critical
+
+Campaign Rules for Item Reveals:
+- Max 2-3 posts per week, minimum 2 days between posts
+- Never use "Item #1", "daily reveal", "first of many" (drip-feed language)
+- Rotate formats: glamor shots, curiosity teasers, lore drops, behind-the-scenes
+- Tier 1 content (sets, legendary): Can stand alone
+- Tier 2 content (weapons, variants): Needs anchor context
+
+Your role: Help users develop their raw ideas into high-performing X posts. Analyze their input, suggest creative angles, and generate algorithm-optimized drafts. Be conversational, creative, and specific to gaming/Critters Quest context.`,
+
+      learnTab: `You are an expert on the X (Twitter) algorithm, based on the xai-org/x-algorithm open source documentation. You explain how the algorithm works in clear, actionable terms for content creators.
+
+Core Algorithm Knowledge:
+- Phoenix Scorer: Grok-based transformer predicting 15+ user actions (P(favorite), P(reply), P(repost), P(quote), P(click), P(video_view), P(photo_expand), P(dwell), P(follow_author), P(block), P(mute), P(report))
+- Scoring Formula: Final Score = Σ (weight_i × P(action_i))
+- Two-Tower Model: One tower encodes user preferences, another encodes content. Similarity determines ranking.
+- Pre-Score Filters: AgeFilter, MutedKeywordFilter, VFFilter, RepostDeduplication, AuthorDiversity
+
+Key Insights:
+- Reach killers: External links (-30%), 4+ hashtags (spam), engagement bait, muted keywords
+- Reach boosters: Questions (+12 reply), community language (+8 follow), video (+20), images (+15)
+- Optimal length: 100-200 characters
+- Timing: Engagement velocity in first 15-30 min is critical
+- Dwell time (P(dwell)): Mystery/curiosity content keeps users reading longer
+
+Answer questions about the X algorithm clearly and specifically. Provide actionable advice. Reference specific algorithm components when relevant.`,
+
+      postOptimizer: `You are an X (Twitter) post optimization expert. Analyze posts and provide specific, actionable improvements based on the X algorithm.
+
+When analyzing a post, evaluate:
+1. Engagement potential (questions, hooks, curiosity)
+2. Content quality (spam signals, muted keywords, length)
+3. Media format recommendations
+4. Link handling (should be in replies, not main post)
+5. Timing and campaign fit
+6. Algorithm-specific optimizations
+
+Provide:
+- A score breakdown (engagement, quality, format, safety)
+- Specific warnings about issues
+- 2-3 optimized variant suggestions
+- Reasoning for each recommendation
+
+Be specific and actionable. Reference algorithm factors (P(reply), P(dwell), etc.) when explaining recommendations.`
+    };
+
+    // OpenAI API call function
+    const callOpenAI = async (apiKey, messages, options = {}) => {
+      const { model = 'gpt-4o-mini', temperature = 0.7, max_tokens = 1000 } = options;
+
+      try {
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${apiKey}`
+          },
+          body: JSON.stringify({
+            model,
+            messages,
+            temperature,
+            max_tokens
+          })
+        });
+
+        if (!response.ok) {
+          const error = await response.json();
+          throw new Error(error.error?.message || 'API request failed');
+        }
+
+        const data = await response.json();
+        return data.choices[0].message.content;
+      } catch (error) {
+        console.error('OpenAI API error:', error);
+        throw error;
+      }
+    };
+
+    // API Key Settings Component
+    const APISettings = ({ apiKey, setApiKey, isOpen, onClose }) => {
+      const [tempKey, setTempKey] = useState(apiKey);
+      const [showKey, setShowKey] = useState(false);
+
+      const handleSave = () => {
+        setApiKey(tempKey);
+        localStorage.setItem('openai_api_key', tempKey);
+        onClose();
+      };
+
+      if (!isOpen) return null;
+
+      return (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+          <div className="rounded-xl p-6 max-w-md w-full mx-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FFB84A' }}>
+            <h3 className="text-lg font-semibold mb-4" style={{ color: '#FFB84A' }}>OpenAI API Settings</h3>
+
+            <div className="mb-4">
+              <label className="block text-sm mb-2" style={{ color: '#FFFFFF' }}>API Key</label>
+              <div className="flex gap-2">
+                <input
+                  type={showKey ? 'text' : 'password'}
+                  value={tempKey}
+                  onChange={(e) => setTempKey(e.target.value)}
+                  placeholder="sk-..."
+                  className="flex-1 rounded-lg px-4 py-2 text-sm"
+                  style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                />
+                <button
+                  onClick={() => setShowKey(!showKey)}
+                  className="px-3 py-2 rounded-lg text-xs"
+                  style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '3px solid #0E0E0E' }}
+                >
+                  {showKey ? 'Hide' : 'Show'}
+                </button>
+              </div>
+              <p className="text-xs mt-2" style={{ color: '#FFFFFF', opacity: 0.5 }}>
+                Your API key is stored locally in your browser and never sent to our servers.
+              </p>
+            </div>
+
+            <div className="mb-4 p-3 rounded-lg" style={{ backgroundColor: '#2A2A2A' }}>
+              <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.7 }}>
+                Get your API key from <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer" style={{ color: '#24E0FF' }}>platform.openai.com/api-keys</a>
+              </p>
+            </div>
+
+            <div className="flex gap-2">
+              <button
+                onClick={onClose}
+                className="flex-1 py-2 rounded-lg text-sm font-medium"
+                style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '3px solid #0E0E0E' }}
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleSave}
+                className="flex-1 py-2 rounded-lg text-sm font-medium"
+                style={{ backgroundColor: '#89D005', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
+              >
+                Save
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // API Status Indicator
+    const APIStatusIndicator = ({ apiKey, onClick }) => {
+      const isConfigured = apiKey && apiKey.length > 0;
+
+      return (
+        <button
+          onClick={onClick}
+          className="flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs transition-colors hover:opacity-80"
+          style={{
+            backgroundColor: isConfigured ? '#89D005' : '#FF6B6B',
+            color: '#0E0E0E',
+            border: '2px solid #0E0E0E'
+          }}
+        >
+          <div className={`w-2 h-2 rounded-full ${isConfigured ? 'bg-green-800' : 'bg-red-800'}`}></div>
+          {isConfigured ? 'AI Connected' : 'Setup AI'}
+        </button>
+      );
+    };
 
     // ============================================
     // X ALGORITHM KNOWLEDGE BASE
@@ -683,22 +870,22 @@
     // ============================================
 
     const StrategyBuilder = ({ onExportToOptimizer }) => {
+      const { apiKey } = useOpenAI();
       const [messages, setMessages] = useState([
         { id: 1, text: "Hey! I'm here to help you craft an algorithm-optimized marketing strategy.\n\nShare your idea, announcement, or what you want to communicate, and I'll help you develop it into high-performing X posts.", isUser: false }
       ]);
       const [input, setInput] = useState('');
       const [isTyping, setIsTyping] = useState(false);
-      const [conversationState, setConversationState] = useState('initial'); // initial, analyzing, angles, drafts, refining, complete
+      const [chatHistory, setChatHistory] = useState([
+        { role: 'system', content: SYSTEM_PROMPTS.strategyBuilder }
+      ]);
       const [context, setContext] = useState({});
-      const [analysis, setAnalysis] = useState(null);
-      const [selectedAngle, setSelectedAngle] = useState(null);
       const [drafts, setDrafts] = useState([]);
       const [finalPlan, setFinalPlan] = useState(null);
       const chatEndRef = useRef(null);
       const chatContainerRef = useRef(null);
 
       useEffect(() => {
-        // Scroll within the chat container only, not the whole page
         if (chatContainerRef.current) {
           chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
         }
@@ -708,116 +895,63 @@
         setMessages(prev => [...prev, { id: Date.now(), text, isUser }]);
       };
 
-      const simulateTyping = async (callback, delay = 1000) => {
-        setIsTyping(true);
-        await new Promise(r => setTimeout(r, delay));
-        setIsTyping(false);
-        callback();
-      };
-
       const handleSend = async () => {
         if (!input.trim()) return;
         const userInput = input.trim();
         setInput('');
         addMessage(userInput, true);
 
-        if (conversationState === 'initial') {
-          // Analyze the initial idea
-          await simulateTyping(() => {
+        // Add user message to chat history
+        const newHistory = [...chatHistory, { role: 'user', content: userInput }];
+        setChatHistory(newHistory);
+
+        setIsTyping(true);
+
+        try {
+          if (apiKey) {
+            // Use real AI
+            const response = await callOpenAI(apiKey, newHistory, { max_tokens: 1500 });
+            addMessage(response);
+            setChatHistory([...newHistory, { role: 'assistant', content: response }]);
+
+            // Extract drafts if the response contains them
+            const draftMatches = response.match(/(?:Draft \d+|Option \d+|Version \d+)[:\s]*["""]([^"""]+)["""]/gi);
+            if (draftMatches) {
+              const extractedDrafts = draftMatches.map((match, i) => ({
+                style: `Draft ${i + 1}`,
+                content: match.replace(/(?:Draft \d+|Option \d+|Version \d+)[:\s]*["""]/i, '').replace(/["""]$/, ''),
+                reasoning: 'AI-generated draft'
+              }));
+              setDrafts(extractedDrafts);
+            }
+          } else {
+            // Fallback to canned response
+            await new Promise(r => setTimeout(r, 1000));
             const ideaAnalysis = analyzeIdea(userInput, context);
-            setAnalysis(ideaAnalysis);
             setContext(prev => ({ ...prev, originalIdea: userInput }));
-
-            addMessage(`Great! I see this as a **${ideaAnalysis.coreMessage}**.\n\nI've identified several angles we could take:\n\n${ideaAnalysis.suggestedAngles.map(a => `- **${a.angle}**: ${a.desc}`).join('\n')}\n\n${ideaAnalysis.algorithmTips.length ? '\nAlgorithm insights:\n' + ideaAnalysis.algorithmTips.map(t => `- ${t}`).join('\n') : ''}`);
-
-            setConversationState('angles');
-          }, 1500);
-
-        } else if (conversationState === 'clarifying') {
-          // Process clarifying answer
-          setContext(prev => ({ ...prev, clarification: userInput }));
-          await simulateTyping(() => {
-            const updatedAnalysis = analyzeIdea(context.originalIdea, { ...context, clarification: userInput });
-            setAnalysis(updatedAnalysis);
-            addMessage(`Perfect, that helps! Here are the angles I'd suggest:\n\n${updatedAnalysis.suggestedAngles.map(a => `- **${a.angle}**: ${a.desc}`).join('\n')}\n\nSelect an angle below, or tell me if you have a different direction in mind.`);
-            setConversationState('angles');
-          }, 1200);
-
-        } else if (conversationState === 'angles') {
-          // User is giving custom angle direction
-          setSelectedAngle(userInput);
-          setContext(prev => ({ ...prev, customAngle: userInput }));
-          await simulateTyping(() => {
-            const generatedDrafts = generateStrategyDrafts(context.originalIdea, context, userInput);
-            setDrafts(generatedDrafts);
-            addMessage(`I like that direction! Here are some draft options based on "${userInput}":\n\nSelect one to refine, or tell me what you'd change.`);
-            setConversationState('drafts');
-          }, 1500);
-
-        } else if (conversationState === 'drafts' || conversationState === 'refining') {
-          // User is providing feedback on drafts
-          await simulateTyping(() => {
-            // Incorporate feedback into new drafts
-            const refinedDrafts = [
-              {
-                style: 'Refined Based on Feedback',
-                content: userInput.length > 50 ? userInput : `${context.originalIdea}\n\n${userInput}`,
-                reasoning: 'Incorporated your specific feedback'
-              },
-              ...drafts.slice(0, 1)
-            ];
-            setDrafts(refinedDrafts);
-            addMessage(`Got it! I've refined the drafts based on your feedback. How do these look?\n\nWhen you're happy, click "Finalize Strategy" to lock in your plan.`);
-            setConversationState('refining');
-          }, 1200);
+            addMessage(`Great! I see this as a **${ideaAnalysis.coreMessage}**.\n\nI've identified several angles we could take:\n\n${ideaAnalysis.suggestedAngles.map(a => `- **${a.angle}**: ${a.desc}`).join('\n')}\n\n${ideaAnalysis.algorithmTips.length ? '\nAlgorithm insights:\n' + ideaAnalysis.algorithmTips.map(t => `- ${t}`).join('\n') : ''}\n\n⚠️ *Configure your OpenAI API key for better AI responses!*`);
+          }
+        } catch (error) {
+          addMessage(`Sorry, there was an error: ${error.message}\n\nPlease check your API key and try again.`);
         }
-      };
 
-      const handleAngleSelect = async (angle) => {
-        setSelectedAngle(angle.angle);
-        setContext(prev => ({ ...prev, selectedAngle: angle.angle }));
-        addMessage(`I'll go with "${angle.angle}"`, true);
-
-        await simulateTyping(() => {
-          const generatedDrafts = generateStrategyDrafts(context.originalIdea, context, angle.angle);
-          setDrafts(generatedDrafts);
-          addMessage(`Great choice! Here are draft options using the "${angle.angle}" approach:\n\nPick one to use, edit it, or tell me what to change.`);
-          setConversationState('drafts');
-        }, 1500);
+        setIsTyping(false);
       };
 
       const handleUseDraft = (content) => {
-        setContext(prev => ({ ...prev, finalDraft: content }));
-        const plan = {
-          coreMessage: analysis?.coreMessage || context.originalIdea,
-          audience: context.audience || 'Critters Quest community',
-          angle: selectedAngle || 'Direct',
-          drafts: drafts.filter(d => d.content === content || drafts.indexOf(d) === 0),
-          algorithmTips: analysis?.algorithmTips || ['Add a question for P(reply)', 'Use visuals for P(photo_expand)']
-        };
-        setFinalPlan(plan);
-        addMessage(`Strategy finalized!\n\nYour marketing plan is ready. You can now export it to the Post Optimizer for final scoring and optimization.`);
-        setConversationState('complete');
+        onExportToOptimizer(content);
       };
 
       const handleEditDraft = (content) => {
         setInput(content);
       };
 
-      const handleFinalize = () => {
-        if (drafts.length > 0) {
-          handleUseDraft(drafts[0].content);
-        }
-      };
-
       const handleReset = () => {
         setMessages([
           { id: 1, text: "Ready for a new strategy! Share your next idea or announcement.", isUser: false }
         ]);
-        setConversationState('initial');
+        setChatHistory([{ role: 'system', content: SYSTEM_PROMPTS.strategyBuilder }]);
         setContext({});
-        setAnalysis(null);
-        setSelectedAngle(null);
         setDrafts([]);
         setFinalPlan(null);
       };
@@ -828,7 +962,9 @@
           <div className="p-4 flex justify-between items-center" style={{ borderBottom: '4px solid #FFB84A' }}>
             <div>
               <h2 className="text-lg font-semibold" style={{ color: '#FDBA4D' }}>Strategy Builder</h2>
-              <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.7 }}>Conversational marketing strategy development</p>
+              <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.7 }}>
+                {apiKey ? 'AI-powered strategy development' : 'Configure API key for AI responses'}
+              </p>
             </div>
             <button onClick={handleReset} className="text-xs hover:opacity-80" style={{ color: '#FFFFFF' }}>
               Start New
@@ -842,44 +978,12 @@
             ))}
             {isTyping && <ChatMessage isTyping={true} />}
 
-            {/* Angle Selection */}
-            {conversationState === 'angles' && analysis?.suggestedAngles && (
-              <div className="grid grid-cols-2 gap-2 mt-4">
-                {analysis.suggestedAngles.map((angle, i) => (
-                  <AngleCard
-                    key={i}
-                    angle={angle.angle}
-                    desc={angle.desc}
-                    selected={selectedAngle === angle.angle}
-                    onClick={() => handleAngleSelect(angle)}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* Draft Options */}
-            {(conversationState === 'drafts' || conversationState === 'refining') && drafts.length > 0 && (
+            {/* Draft Cards when AI generates them */}
+            {drafts.length > 0 && (
               <div className="space-y-3 mt-4">
                 {drafts.map((draft, i) => (
                   <DraftCard key={i} draft={draft} onUse={handleUseDraft} onEdit={handleEditDraft} />
                 ))}
-                <button
-                  onClick={handleFinalize}
-                  className="w-full py-2 rounded-lg text-sm font-medium transition-colors hover:opacity-90"
-                  style={{ backgroundColor: '#89D005', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
-                >
-                  Finalize Strategy
-                </button>
-              </div>
-            )}
-
-            {/* Final Plan */}
-            {conversationState === 'complete' && finalPlan && (
-              <div className="mt-4">
-                <StrategyPlanCard
-                  plan={finalPlan}
-                  onExport={() => onExportToOptimizer(finalPlan.drafts[0]?.content || context.originalIdea)}
-                />
               </div>
             )}
 
@@ -893,14 +997,11 @@
                 type="text"
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                onKeyPress={(e) => e.key === 'Enter' && handleSend()}
-                placeholder={
-                  conversationState === 'initial' ? "Share your idea or announcement..." :
-                  conversationState === 'angles' ? "Select an angle above or describe your own..." :
-                  "Type your feedback or refinements..."
-                }
+                onKeyPress={(e) => e.key === 'Enter' && !isTyping && handleSend()}
+                placeholder="Share your idea, ask for refinements, or request drafts..."
                 className="flex-1 rounded-lg px-4 py-2 text-sm"
                 style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                disabled={isTyping}
               />
               <button
                 onClick={handleSend}
@@ -1607,9 +1708,11 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
     // ============================================
 
     const LearnView = () => {
+      const { apiKey } = useOpenAI();
       const [question, setQuestion] = useState('');
       const [response, setResponse] = useState(null);
       const [selectedModule, setSelectedModule] = useState(null);
+      const [isLoading, setIsLoading] = useState(false);
 
       // Format markdown-like text to JSX
       const formatAnswer = (text) => {
@@ -1625,29 +1728,65 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
               </p>
             );
           }
-          if (line.startsWith('•')) return <p key={i} className="text-sm ml-2 leading-relaxed">{line}</p>;
+          if (line.startsWith('•') || line.startsWith('-')) return <p key={i} className="text-sm ml-2 leading-relaxed">{line}</p>;
           if (/^\d+\./.test(line)) return <p key={i} className="text-sm ml-2 leading-relaxed font-medium">{line}</p>;
           if (!line.trim()) return <div key={i} className="h-2" />;
           return <p key={i} className="text-sm leading-relaxed">{line}</p>;
         });
       };
 
-      const handleAsk = () => {
+      const handleAsk = async () => {
         if (!question.trim()) return;
-        const result = ALGORITHM_KNOWLEDGE.getResponse(question);
-        setResponse(result);
+        setIsLoading(true);
+
+        try {
+          if (apiKey) {
+            // Use real AI
+            const messages = [
+              { role: 'system', content: SYSTEM_PROMPTS.learnTab },
+              { role: 'user', content: question }
+            ];
+            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 1000 });
+            setResponse({ title: 'AI Response', answer: aiResponse, related: [] });
+          } else {
+            // Fallback to knowledge base
+            const result = ALGORITHM_KNOWLEDGE.getResponse(question);
+            result.answer += '\n\n⚠️ *Configure your OpenAI API key for more detailed AI responses!*';
+            setResponse(result);
+          }
+        } catch (error) {
+          setResponse({ title: 'Error', answer: `Sorry, there was an error: ${error.message}`, related: [] });
+        }
+
+        setIsLoading(false);
       };
 
-      const handleQuickQuestion = (q) => {
+      const handleQuickQuestion = async (q) => {
         setQuestion(q);
-        const result = ALGORITHM_KNOWLEDGE.getResponse(q);
-        setResponse(result);
+        setIsLoading(true);
+
+        try {
+          if (apiKey) {
+            const messages = [
+              { role: 'system', content: SYSTEM_PROMPTS.learnTab },
+              { role: 'user', content: q }
+            ];
+            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 1000 });
+            setResponse({ title: 'AI Response', answer: aiResponse, related: [] });
+          } else {
+            const result = ALGORITHM_KNOWLEDGE.getResponse(q);
+            setResponse(result);
+          }
+        } catch (error) {
+          setResponse({ title: 'Error', answer: `Sorry, there was an error: ${error.message}`, related: [] });
+        }
+
+        setIsLoading(false);
       };
 
-      const handleRelatedClick = (topic) => {
+      const handleRelatedClick = async (topic) => {
         setQuestion(topic);
-        const result = ALGORITHM_KNOWLEDGE.getResponse(topic);
-        setResponse(result);
+        handleQuickQuestion(topic);
       };
 
       return (
@@ -1663,17 +1802,19 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
                   type="text"
                   value={question}
                   onChange={(e) => setQuestion(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && handleAsk()}
+                  onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleAsk()}
                   placeholder="e.g., 'explain repetitive posting patterns' or 'how do links affect reach?'"
                   className="flex-1 rounded-lg px-4 py-3 text-sm"
                   style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                  disabled={isLoading}
                 />
                 <button
                   onClick={handleAsk}
-                  className="px-6 py-3 rounded-lg text-sm font-semibold hover:opacity-90"
+                  disabled={isLoading}
+                  className="px-6 py-3 rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50"
                   style={{ backgroundColor: '#24E0FF', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
                 >
-                  Ask
+                  {isLoading ? '...' : 'Ask'}
                 </button>
               </div>
 
@@ -1830,12 +1971,54 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
       const [activeTab, setActiveTab] = useState('scores');
       const [copied, setCopied] = useState(false);
       const [selectedPreset, setSelectedPreset] = useState(null);
+      const [isAnalyzing, setIsAnalyzing] = useState(false);
+      const [aiAnalysis, setAiAnalysis] = useState(null);
 
-      const handleAnalyze = useCallback(() => {
+      // API Key state
+      const [apiKey, setApiKey] = useState(() => localStorage.getItem('openai_api_key') || '');
+      const [showApiSettings, setShowApiSettings] = useState(false);
+
+      const handleAnalyze = useCallback(async () => {
         if (!draft.trim()) return;
+
+        // Always run the local analysis for scores
         const result = analyzePost(draft, { ...options, draft });
         setAnalysis(result);
-      }, [draft, options]);
+
+        // If API key is available, get AI-powered analysis
+        if (apiKey) {
+          setIsAnalyzing(true);
+          setAiAnalysis(null);
+          try {
+            const messages = [
+              { role: 'system', content: SYSTEM_PROMPTS.postOptimizer },
+              { role: 'user', content: `Analyze this X post and provide optimization recommendations:
+
+Post: "${draft}"
+
+Context:
+- Goal: ${options.goal}
+- Media type: ${options.mediaType}
+- Tone: ${options.tone}
+- Target audience: ${options.targetAudience}
+- Contains external link: ${options.hasLink ? 'Yes' : 'No'}
+
+Please provide:
+1. Overall assessment
+2. Specific issues found
+3. 2-3 optimized variants with explanations
+4. Algorithm-specific recommendations` }
+            ];
+            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 1500 });
+            setAiAnalysis(aiResponse);
+          } catch (error) {
+            console.error('AI analysis failed:', error);
+            setAiAnalysis(`AI analysis failed: ${error.message}. Using local analysis only.`);
+          } finally {
+            setIsAnalyzing(false);
+          }
+        }
+      }, [draft, options, apiKey]);
 
       const handleCopy = useCallback((text) => {
         navigator.clipboard.writeText(text);
@@ -1861,6 +2044,7 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
       const charCountColor = charCount > 280 ? 'text-red-400' : charCount > 240 ? 'text-yellow-400' : 'text-gray-400';
 
       return (
+        <OpenAIContext.Provider value={{ apiKey, setApiKey }}>
         <div className="min-h-screen" style={{ backgroundColor: '#0E0E0E' }}>
           {/* Header */}
           <header className="sticky top-0 z-10" style={{ backgroundColor: '#FFB84A', borderBottom: '4px solid #0E0E0E' }}>
@@ -1906,6 +2090,7 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
                       Post Optimizer
                     </button>
                   </div>
+                  <APIStatusIndicator apiKey={apiKey} onClick={() => setShowApiSettings(true)} />
                   <a
                     href="https://github.com/xai-org/x-algorithm"
                     target="_blank"
@@ -1919,6 +2104,9 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
               </div>
             </div>
           </header>
+
+          {/* API Settings Modal */}
+          <APISettings apiKey={apiKey} setApiKey={setApiKey} isOpen={showApiSettings} onClose={() => setShowApiSettings(false)} />
 
           <main className="max-w-7xl mx-auto px-4 py-6 bg-[#75FFE9]">
             {activeView === 'learn' ? (
@@ -2109,15 +2297,18 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
                   </div>
 
                   {/* Analyze Button */}
-                  <button onClick={handleAnalyze} disabled={!draft.trim()}
-                    className="w-full py-3 rounded-xl font-semibold transition-all disabled:cursor-not-allowed hover:opacity-90"
+                  <button onClick={handleAnalyze} disabled={!draft.trim() || isAnalyzing}
+                    className="w-full py-3 rounded-xl font-semibold transition-all disabled:cursor-not-allowed hover:opacity-90 flex items-center justify-center gap-2"
                     style={{
-                      backgroundColor: draft.trim() ? '#FFB84A' : '#2A2A2A',
-                      color: draft.trim() ? '#0E0E0E' : '#FFFFFF',
+                      backgroundColor: draft.trim() && !isAnalyzing ? '#FFB84A' : '#2A2A2A',
+                      color: draft.trim() && !isAnalyzing ? '#0E0E0E' : '#FFFFFF',
                       border: '3px solid #0E0E0E',
-                      opacity: draft.trim() ? 1 : 0.5
+                      opacity: draft.trim() && !isAnalyzing ? 1 : 0.5
                     }}>
-                    Analyze & Optimize
+                    {isAnalyzing && (
+                      <div className="animate-spin w-4 h-4 border-2 border-t-transparent rounded-full" style={{ borderColor: '#0E0E0E', borderTopColor: 'transparent' }}></div>
+                    )}
+                    {isAnalyzing ? 'Analyzing...' : 'Analyze & Optimize'}
                   </button>
                 </div>
 
@@ -2166,7 +2357,7 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
 
                       {/* Tabs */}
                       <div className="flex gap-2" style={{ borderBottom: '4px solid #2A2A2A' }}>
-                        {['scores', 'variants', 'strategy'].map(tab => (
+                        {['scores', 'variants', 'strategy', ...(apiKey ? ['ai'] : [])].map(tab => (
                           <button key={tab} onClick={() => setActiveTab(tab)}
                             className="px-4 py-2 text-sm font-medium transition-colors capitalize"
                             style={{
@@ -2174,7 +2365,7 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
                               borderBottom: activeTab === tab ? '4px solid #FFB84A' : '4px solid transparent',
                               marginBottom: '-4px'
                             }}>
-                            {tab === 'scores' ? 'Analysis' : tab === 'variants' ? 'Optimized' : 'Strategy'}
+                            {tab === 'scores' ? 'Analysis' : tab === 'variants' ? 'Optimized' : tab === 'strategy' ? 'Strategy' : 'AI Insights'}
                           </button>
                         ))}
                       </div>
@@ -2282,6 +2473,34 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
                             </div>
                           </div>
                         )}
+                        {activeTab === 'ai' && (
+                          <div className="space-y-3">
+                            {isAnalyzing ? (
+                              <div className="flex items-center justify-center py-8">
+                                <div className="flex items-center gap-3">
+                                  <div className="animate-spin w-6 h-6 border-2 border-t-transparent rounded-full" style={{ borderColor: '#FFB84A', borderTopColor: 'transparent' }}></div>
+                                  <span style={{ color: '#FFB84A' }}>Analyzing with AI...</span>
+                                </div>
+                              </div>
+                            ) : aiAnalysis ? (
+                              <div className="space-y-4">
+                                <div className="flex items-center gap-2 mb-4">
+                                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#89D005' }}></div>
+                                  <span className="text-sm font-medium" style={{ color: '#89D005' }}>AI-Powered Analysis</span>
+                                </div>
+                                <div className="prose prose-invert text-sm whitespace-pre-wrap" style={{ color: '#FFFFFF' }}>
+                                  {aiAnalysis}
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="text-center py-8">
+                                <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.7 }}>
+                                  Click "Analyze & Optimize" to get AI-powered insights
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
                     </>
                   ) : (
@@ -2324,6 +2543,7 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
             </div>
           )}
         </div>
+        </OpenAIContext.Provider>
       );
     };
 
