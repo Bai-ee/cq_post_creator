@@ -95,6 +95,123 @@ Provide:
 Be specific and actionable. Reference algorithm factors (P(reply), P(dwell), etc.) when explaining recommendations.`
     };
 
+    // Dynamic Tips Generator - analyzes content and returns relevant tips
+    const generateDynamicTips = (content, context = {}) => {
+      const text = (content || '').toLowerCase();
+      const doThis = [];
+      const avoidThis = [];
+      const insights = [];
+
+      // Check for questions
+      if (!text.includes('?')) {
+        doThis.push({ tip: 'Add a question', impact: '+12% replies', priority: 1 });
+      } else {
+        insights.push({ tip: 'Question detected ✓', impact: 'Boosts P(reply)', type: 'positive' });
+      }
+
+      // Check for links
+      if (text.includes('http') || text.includes('www.') || text.includes('.com') || text.includes('.io') || context.hasLink) {
+        avoidThis.push({ tip: 'Link in main post', impact: '-30% reach', priority: 1 });
+        doThis.push({ tip: 'Move link to reply', impact: 'Recovers reach', priority: 1 });
+      }
+
+      // Check for hashtags
+      const hashtagCount = (text.match(/#/g) || []).length;
+      if (hashtagCount >= 4) {
+        avoidThis.push({ tip: `${hashtagCount} hashtags (spam signal)`, impact: 'Triggers filter', priority: 1 });
+        doThis.push({ tip: 'Use 1-2 hashtags max', impact: 'Avoid spam filter', priority: 1 });
+      } else if (hashtagCount === 0 && text.length > 20) {
+        doThis.push({ tip: 'Add 1-2 relevant hashtags', impact: '+discoverability', priority: 3 });
+      } else if (hashtagCount > 0 && hashtagCount <= 3) {
+        insights.push({ tip: `${hashtagCount} hashtag${hashtagCount > 1 ? 's' : ''} ✓`, impact: 'Good range', type: 'positive' });
+      }
+
+      // Check length
+      const charCount = content?.length || 0;
+      if (charCount > 280) {
+        avoidThis.push({ tip: `${charCount} chars (over limit)`, impact: 'Cannot post', priority: 1 });
+        doThis.push({ tip: 'Trim to 280 characters', impact: 'Required', priority: 1 });
+      } else if (charCount > 200 && charCount <= 280) {
+        insights.push({ tip: 'Longer post', impact: 'OK but shorter often better', type: 'neutral' });
+      } else if (charCount >= 100 && charCount <= 200) {
+        insights.push({ tip: 'Optimal length ✓', impact: '100-200 chars ideal', type: 'positive' });
+      } else if (charCount > 0 && charCount < 100) {
+        doThis.push({ tip: 'Consider adding detail', impact: 'More context helps', priority: 3 });
+      }
+
+      // Check for spam words
+      const spamWords = ['guaranteed', '100x', '1000x', 'dont miss', "don't miss", 'last chance', 'act now', 'limited time'];
+      const foundSpam = spamWords.filter(word => text.includes(word));
+      if (foundSpam.length > 0) {
+        avoidThis.push({ tip: `"${foundSpam[0]}" (spam trigger)`, impact: 'Reduces reach', priority: 1 });
+      }
+
+      // Check for engagement bait
+      const engagementBait = ['like if', 'rt if', 'retweet if', 'follow for', 'like and'];
+      const foundBait = engagementBait.filter(phrase => text.includes(phrase));
+      if (foundBait.length > 0) {
+        avoidThis.push({ tip: 'Engagement bait detected', impact: 'Algorithm penalty', priority: 1 });
+        doThis.push({ tip: 'Use genuine CTA instead', impact: 'Better engagement', priority: 2 });
+      }
+
+      // Check for community language
+      if (text.includes(' we ') || text.includes(' our ') || text.includes("we're") || text.includes('our ')) {
+        insights.push({ tip: 'Community language ✓', impact: '+8% P(follow)', type: 'positive' });
+      } else {
+        doThis.push({ tip: 'Use "we/our" language', impact: '+8% follows', priority: 2 });
+      }
+
+      // Check for media mentions
+      if (context.mediaType === 'image' || text.includes('image') || text.includes('photo') || text.includes('pic')) {
+        insights.push({ tip: 'Image planned ✓', impact: '+15% engagement', type: 'positive' });
+      } else if (context.mediaType === 'video' || text.includes('video')) {
+        insights.push({ tip: 'Video planned ✓', impact: '+20% engagement', type: 'positive' });
+      } else if (context.mediaType === 'none' || !context.mediaType) {
+        doThis.push({ tip: 'Add image or video', impact: '+15-20% reach', priority: 2 });
+      }
+
+      // Check for drip-feed language (campaign specific)
+      const dripWords = ['item #', 'day 1', 'day 2', 'first of', 'daily reveal', '1 of', '2 of', 'first in'];
+      const foundDrip = dripWords.filter(word => text.includes(word));
+      if (foundDrip.length > 0) {
+        avoidThis.push({ tip: 'Drip-feed language detected', impact: 'Feels repetitive', priority: 2 });
+        doThis.push({ tip: 'Make each post standalone', impact: 'Better reception', priority: 2 });
+      }
+
+      // Check for mystery/curiosity
+      const mysteryWords = ['secret', 'hidden', 'discover', 'reveal', 'surprise', 'mystery', 'unlock', 'exclusive'];
+      const foundMystery = mysteryWords.filter(word => text.includes(word));
+      if (foundMystery.length > 0) {
+        insights.push({ tip: 'Curiosity hook ✓', impact: '+P(dwell) time', type: 'positive' });
+      } else if (text.length > 50) {
+        doThis.push({ tip: 'Add curiosity/mystery', impact: '+dwell time', priority: 3 });
+      }
+
+      // Check for timing mentions
+      if (text.includes('gm') || text.includes('good morning')) {
+        insights.push({ tip: 'GM post format', impact: 'Best early morning', type: 'neutral' });
+      }
+
+      // Sort by priority
+      doThis.sort((a, b) => a.priority - b.priority);
+      avoidThis.sort((a, b) => a.priority - b.priority);
+
+      return {
+        doThis: doThis.slice(0, 5),
+        avoidThis: avoidThis.slice(0, 5),
+        insights: insights.slice(0, 4),
+        score: {
+          hasQuestion: text.includes('?'),
+          hasLink: text.includes('http') || context.hasLink,
+          hashtagCount,
+          charCount,
+          hasMedia: context.mediaType && context.mediaType !== 'none',
+          hasCommunityLanguage: text.includes(' we ') || text.includes(' our '),
+          hasSpam: foundSpam.length > 0 || foundBait.length > 0
+        }
+      };
+    };
+
     // OpenAI API call function
     const callOpenAI = async (apiKey, messages, options = {}) => {
       const { model = 'gpt-4o-mini', temperature = 0.7, max_tokens = 1000 } = options;
@@ -213,6 +330,108 @@ Be specific and actionable. Reference algorithm factors (P(reply), P(dwell), etc
           <div className={`w-2 h-2 rounded-full ${isConfigured ? 'bg-green-800' : 'bg-red-800'}`}></div>
           {isConfigured ? 'AI Connected' : 'Setup AI'}
         </button>
+      );
+    };
+
+    // Dynamic Tips Sidebar Component
+    const DynamicTipsSidebar = ({ content, context = {}, showCampaignRules = false }) => {
+      const tips = useMemo(() => generateDynamicTips(content, context), [content, context]);
+      const hasContent = content && content.length > 10;
+
+      return (
+        <div className="space-y-4">
+          {/* Dynamic Do This */}
+          <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #89D005', borderRadius: '16px' }}>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: '#89D005' }}>
+              {hasContent ? 'Do This ↑' : 'Boost Your Score ↑'}
+            </h3>
+            <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+              {hasContent && tips.doThis.length > 0 ? (
+                tips.doThis.map((item, i) => (
+                  <li key={i} className="flex justify-between items-start gap-2">
+                    <span>• {item.tip}</span>
+                    <span className="whitespace-nowrap" style={{ color: '#89D005' }}>{item.impact}</span>
+                  </li>
+                ))
+              ) : (
+                <>
+                  <li className="flex justify-between"><span>• End with a question</span><span style={{ color: '#89D005' }}>+12%</span></li>
+                  <li className="flex justify-between"><span>• Add image or video</span><span style={{ color: '#89D005' }}>+15-20%</span></li>
+                  <li className="flex justify-between"><span>• Use "we/our" language</span><span style={{ color: '#89D005' }}>+8%</span></li>
+                  <li className="flex justify-between"><span>• Keep 100-200 chars</span><span style={{ color: '#89D005' }}>optimal</span></li>
+                  <li className="flex justify-between"><span>• Build curiosity</span><span style={{ color: '#89D005' }}>+dwell</span></li>
+                </>
+              )}
+            </ul>
+          </div>
+
+          {/* Dynamic Avoid This */}
+          <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FF6B6B', borderRadius: '16px' }}>
+            <h3 className="text-sm font-semibold mb-3" style={{ color: '#FF6B6B' }}>
+              {hasContent ? 'Fix This ↓' : 'Kills Your Reach ↓'}
+            </h3>
+            <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+              {hasContent && tips.avoidThis.length > 0 ? (
+                tips.avoidThis.map((item, i) => (
+                  <li key={i} className="flex justify-between items-start gap-2">
+                    <span>• {item.tip}</span>
+                    <span className="whitespace-nowrap" style={{ color: '#FF6B6B' }}>{item.impact}</span>
+                  </li>
+                ))
+              ) : (
+                <>
+                  <li className="flex justify-between"><span>• Link in main post</span><span style={{ color: '#FF6B6B' }}>-30%</span></li>
+                  <li className="flex justify-between"><span>• 4+ hashtags</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
+                  <li className="flex justify-between"><span>• "guaranteed", "100x"</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
+                  <li className="flex justify-between"><span>• "like if", "RT for"</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
+                  <li className="flex justify-between"><span>• No engagement after</span><span style={{ color: '#FF6B6B' }}>buried</span></li>
+                </>
+              )}
+              {hasContent && tips.avoidThis.length === 0 && (
+                <li className="flex items-center gap-2" style={{ color: '#89D005' }}>
+                  <span>✓</span><span>No issues detected!</span>
+                </li>
+              )}
+            </ul>
+          </div>
+
+          {/* Current Status - Only show when there's content */}
+          {hasContent && tips.insights.length > 0 && (
+            <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #24E0FF', borderRadius: '16px' }}>
+              <h3 className="text-sm font-semibold mb-3" style={{ color: '#24E0FF' }}>Current Status</h3>
+              <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                {tips.insights.map((item, i) => (
+                  <li key={i} className="flex justify-between items-start gap-2">
+                    <span>{item.tip}</span>
+                    <span style={{ color: item.type === 'positive' ? '#89D005' : item.type === 'negative' ? '#FF6B6B' : '#FFB84A' }}>
+                      {item.impact}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Campaign Rules - Optional */}
+          {showCampaignRules && (
+            <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FFB84A', borderRadius: '16px' }}>
+              <h3 className="text-sm font-semibold mb-3" style={{ color: '#FFB84A' }}>Campaign Rules</h3>
+              <div className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                <p><span style={{ color: '#FDBA4D' }}>Cadence:</span> 2-3 posts/week max</p>
+                <p><span style={{ color: '#FDBA4D' }}>Timing:</span> Post at 5pm EST</p>
+                <p><span style={{ color: '#FDBA4D' }}>Follow-up:</span> Reply 30-60 min later</p>
+                <p><span style={{ color: '#FF6B6B' }}>Avoid:</span> "Item #1", "daily reveal"</p>
+              </div>
+            </div>
+          )}
+
+          {/* Pro Tip */}
+          <div className="rounded-xl p-4" style={{ backgroundColor: '#FFB84A', border: '3px solid #0E0E0E', borderRadius: '16px' }}>
+            <p className="text-xs font-bold" style={{ color: '#0E0E0E' }}>
+              💡 The first 15-30 minutes matter most. Engage immediately after posting!
+            </p>
+          </div>
+        </div>
       );
     };
 
@@ -869,7 +1088,7 @@ Be specific and actionable. Reference algorithm factors (P(reply), P(dwell), etc
     // STRATEGY BUILDER COMPONENT
     // ============================================
 
-    const StrategyBuilder = ({ onExportToOptimizer }) => {
+    const StrategyBuilder = ({ onExportToOptimizer, onContentChange }) => {
       const { apiKey } = useOpenAI();
       const [messages, setMessages] = useState([
         { id: 1, text: "Hey! I'm here to help you craft an algorithm-optimized marketing strategy.\n\nShare your idea, announcement, or what you want to communicate, and I'll help you develop it into high-performing X posts.", isUser: false }
@@ -884,6 +1103,16 @@ Be specific and actionable. Reference algorithm factors (P(reply), P(dwell), etc
       const [finalPlan, setFinalPlan] = useState(null);
       const chatEndRef = useRef(null);
       const chatContainerRef = useRef(null);
+
+      // Report content changes to parent for dynamic tips
+      useEffect(() => {
+        if (onContentChange) {
+          // Get the last user message or current input
+          const lastUserMsg = [...messages].reverse().find(m => m.isUser);
+          const contentToAnalyze = input || (lastUserMsg ? lastUserMsg.text : '');
+          onContentChange(contentToAnalyze);
+        }
+      }, [input, messages, onContentChange]);
 
       useEffect(() => {
         if (chatContainerRef.current) {
@@ -1874,40 +2103,8 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
               </div>
             </div>
 
-            {/* Key Principles - Sidebar */}
-            <div className="space-y-4">
-              <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #89D005', borderRadius: '16px' }}>
-                <h3 className="text-sm font-semibold mb-3" style={{ color: '#89D005' }}>Do This ✓</h3>
-                <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
-                  <li>• End posts with a question</li>
-                  <li>• Use "we/our" language</li>
-                  <li>• Add images or video</li>
-                  <li>• Keep to 100-200 chars</li>
-                  <li>• Engage within 15 min</li>
-                  <li>• Build curiosity</li>
-                  <li>• Links in replies only</li>
-                </ul>
-              </div>
-
-              <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FF6B6B', borderRadius: '16px' }}>
-                <h3 className="text-sm font-semibold mb-3" style={{ color: '#FF6B6B' }}>Avoid This ✗</h3>
-                <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
-                  <li>• External links in post</li>
-                  <li>• 4+ hashtags</li>
-                  <li>• "guaranteed", "100x"</li>
-                  <li>• "like if", "RT for"</li>
-                  <li>• Daily same format</li>
-                  <li>• "Item #1" language</li>
-                  <li>• Post and ghost</li>
-                </ul>
-              </div>
-
-              <div className="rounded-xl p-4" style={{ backgroundColor: '#24E0FF', border: '3px solid #0E0E0E', borderRadius: '16px' }}>
-                <p className="text-xs font-semibold" style={{ color: '#0E0E0E' }}>
-                  "The algorithm rewards genuine engagement. Mystery, questions, and community language signal quality."
-                </p>
-              </div>
-            </div>
+            {/* Dynamic Tips Sidebar - based on current question/input */}
+            <DynamicTipsSidebar content={input || [...messages].reverse().find(m => m.isUser)?.text || ''} />
           </div>
 
           {/* Bento Grid - Second */}
@@ -1969,6 +2166,9 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
       const [selectedPreset, setSelectedPreset] = useState(null);
       const [isAnalyzing, setIsAnalyzing] = useState(false);
       const [aiAnalysis, setAiAnalysis] = useState(null);
+
+      // Content tracking for dynamic tips
+      const [strategyContent, setStrategyContent] = useState('');
 
       // API Key state
       const [apiKey, setApiKey] = useState(() => localStorage.getItem('openai_api_key') || '');
@@ -2116,85 +2316,10 @@ ${options.mediaType !== 'none' ? `(User is adding ${options.mediaType})` : '(Sug
               /* Strategy Builder View */
               <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
                 <div className="lg:col-span-2">
-                  <StrategyBuilder onExportToOptimizer={handleExportFromStrategy} />
+                  <StrategyBuilder onExportToOptimizer={handleExportFromStrategy} onContentChange={setStrategyContent} />
                 </div>
-                <div className="space-y-4">
-                  {/* Quick Tips */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>How It Works</h3>
-                    <ol className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
-                      <li>1. Share your raw idea or announcement</li>
-                      <li>2. I'll analyze and suggest angles</li>
-                      <li>3. Pick an angle or describe your own</li>
-                      <li>4. Review and refine draft options</li>
-                      <li>5. Export to Post Optimizer for final scoring</li>
-                    </ol>
-                  </div>
-
-                  {/* Algorithm Quick Reference */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Algorithm Quick Tips</h3>
-                    <div className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
-                      <p>- <span style={{ color: '#89D005' }}>Questions</span> +12 P(reply)</p>
-                      <p>- <span style={{ color: '#89D005' }}>"We/Our"</span> +8 P(follow_author)</p>
-                      <p>- <span style={{ color: '#89D005' }}>Images</span> +15 P(photo_expand)</p>
-                      <p>- <span style={{ color: '#89D005' }}>Video</span> +20 P(video_view)</p>
-                      <p>- <span style={{ color: '#FF6B6B' }}>Spam words</span> -25 quality</p>
-                      <p>- <span style={{ color: '#FF6B6B' }}>4+ hashtags</span> spam signal</p>
-                    </div>
-                  </div>
-
-                  {/* Campaign Rules */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FFB84A', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FFB84A', borderBottom: '4px solid #FFB84A', paddingBottom: '10px' }}>Campaign Rules</h3>
-                    <div className="text-xs space-y-3" style={{ color: '#FFFFFF' }}>
-                      <div>
-                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Cadence</p>
-                        <p style={{ opacity: 0.8 }}>2-3 posts/week max. No daily reveals.</p>
-                      </div>
-                      <div>
-                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Weekly Pattern</p>
-                        <p style={{ opacity: 0.8 }}>Mon/Tue: Anchor | Thu: Deep Cut | Sat: Community</p>
-                      </div>
-                      <div>
-                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Content Tiers</p>
-                        <p style={{ opacity: 0.8 }}>Tier 1 (Sets/Legendary): Standalone OK</p>
-                        <p style={{ opacity: 0.8 }}>Tier 2 (Weapons/Variants): Needs anchor context</p>
-                      </div>
-                      <div>
-                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Timing</p>
-                        <p style={{ opacity: 0.8 }}>Post at 5pm EST. Follow up 30-60 min later.</p>
-                      </div>
-                      <div>
-                        <p className="font-semibold" style={{ color: '#FF6B6B' }}>Avoid</p>
-                        <p style={{ opacity: 0.8 }}>"Item #1", "daily reveal", "first of many"</p>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Content Ideas */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Content Ideas</h3>
-                    <div className="space-y-2">
-                      {[
-                        'New feature announcement',
-                        'Community milestone celebration',
-                        'Behind-the-scenes dev update',
-                        'Lore teaser or story drop',
-                        'Player spotlight or UGC share',
-                        'Roadmap progress update'
-                      ].map((idea, i) => (
-                        <button
-                          key={i}
-                          className="w-full text-left text-xs px-3 py-2 rounded-lg transition-colors hover:opacity-80"
-                          style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '2px solid #0E0E0E' }}
-                        >
-                          {idea}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                </div>
+                {/* Dynamic Tips Sidebar */}
+                <DynamicTipsSidebar content={strategyContent} showCampaignRules={true} />
               </div>
             ) : (
               /* Post Optimizer View - Simplified Conversational Design */
@@ -2375,36 +2500,9 @@ ${options.mediaType !== 'none' ? `(User is adding ${options.mediaType})` : '(Sug
                   )}
                 </div>
 
-                {/* Sidebar - Quick Reference */}
+                {/* Dynamic Tips Sidebar - based on current draft */}
                 <div className="space-y-4">
-                  {/* Algorithm Cheat Sheet */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #89D005', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#89D005' }}>Boost Your Score ↑</h3>
-                    <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
-                      <li className="flex justify-between"><span>End with a question</span><span style={{ color: '#89D005' }}>+12%</span></li>
-                      <li className="flex justify-between"><span>Add image</span><span style={{ color: '#89D005' }}>+15%</span></li>
-                      <li className="flex justify-between"><span>Add video</span><span style={{ color: '#89D005' }}>+20%</span></li>
-                      <li className="flex justify-between"><span>Use "we/our"</span><span style={{ color: '#89D005' }}>+8%</span></li>
-                      <li className="flex justify-between"><span>100-200 characters</span><span style={{ color: '#89D005' }}>optimal</span></li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FF6B6B', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FF6B6B' }}>Kills Your Reach ↓</h3>
-                    <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
-                      <li className="flex justify-between"><span>Link in main post</span><span style={{ color: '#FF6B6B' }}>-30%</span></li>
-                      <li className="flex justify-between"><span>4+ hashtags</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
-                      <li className="flex justify-between"><span>"guaranteed", "100x"</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
-                      <li className="flex justify-between"><span>"like if", "RT for"</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
-                      <li className="flex justify-between"><span>No engagement</span><span style={{ color: '#FF6B6B' }}>buried</span></li>
-                    </ul>
-                  </div>
-
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#FFB84A', border: '3px solid #0E0E0E', borderRadius: '16px' }}>
-                    <p className="text-xs font-bold" style={{ color: '#0E0E0E' }}>
-                      💡 Pro tip: The first 15-30 minutes matter most. Engage immediately after posting!
-                    </p>
-                  </div>
+                  <DynamicTipsSidebar content={draft} context={{ hasLink: options.hasLink, mediaType: options.mediaType }} />
 
                   {/* API Status */}
                   {!apiKey && (
