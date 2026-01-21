@@ -1987,32 +1987,36 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
           setAiAnalysis(null);
           try {
             const messages = [
-              { role: 'system', content: SYSTEM_PROMPTS.postOptimizer },
-              { role: 'user', content: `Analyze this X post and provide optimization recommendations:
+              { role: 'system', content: `You are an X (Twitter) post optimizer. Your job is to take a user's draft post and return ONLY an improved, optimized version ready to copy and post.
 
-Post: "${draft}"
+Rules for optimization:
+- Keep under 280 characters (aim for 100-200 for best engagement)
+- Add a question at the end if possible (boosts replies +12%)
+- Use "we/our" community language where appropriate (+8% follow rate)
+- Remove external links from main post (put in reply instead)
+- Limit to 1-2 hashtags max (4+ triggers spam filter)
+- Avoid spam words: "guaranteed", "100x", "like if", "RT for"
+- Create curiosity/mystery to boost dwell time
+- Keep the same tone and intent as the original
 
-Context:
-- Goal: ${options.goal}
-- Media type: ${options.mediaType}
-- Tone: ${options.tone}
-- Target audience: ${options.targetAudience}
-- Contains external link: ${options.hasLink ? 'Yes' : 'No'}
+IMPORTANT: Return ONLY the optimized post text, nothing else. No explanations, no bullet points, no labels. Just the ready-to-post text.` },
+              { role: 'user', content: `Optimize this post for the X algorithm:
 
-Please provide:
-1. Overall assessment
-2. Specific issues found
-3. 2-3 optimized variants with explanations
-4. Algorithm-specific recommendations` }
+"${draft}"
+
+${options.hasLink ? '(Note: User wants to include a link - suggest putting it in a reply instead)' : ''}
+${options.mediaType !== 'none' ? `(User is adding ${options.mediaType})` : '(Suggest adding media for +15-20% reach)'}` }
             ];
-            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 1500 });
+            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 500 });
             setAiAnalysis(aiResponse);
           } catch (error) {
             console.error('AI analysis failed:', error);
-            setAiAnalysis(`AI analysis failed: ${error.message}. Using local analysis only.`);
+            setAiAnalysis(null);
           } finally {
             setIsAnalyzing(false);
           }
+        } else {
+          setIsAnalyzing(false);
         }
       }, [draft, options, apiKey]);
 
@@ -2193,320 +2197,228 @@ Please provide:
                 </div>
               </div>
             ) : (
-              /* Post Optimizer View */
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                {/* Left Column - Input */}
-                <div className="space-y-6">
-                  {/* Preset Selector */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Quick Presets</h3>
-                    <div className="flex flex-wrap gap-2">
-                      {Object.entries(CRITTERS_QUEST_PRESETS).map(([key, preset]) => (
-                        <button
-                          key={key}
-                          onClick={() => { setSelectedPreset(key); setDraft(preset.template); }}
-                          className="px-3 py-1.5 rounded-lg text-sm transition-colors hover:opacity-90"
-                          style={{
-                            backgroundColor: selectedPreset === key ? '#89D005' : '#2A2A2A',
-                            color: selectedPreset === key ? '#0E0E0E' : '#FFFFFF',
-                            border: '3px solid #0E0E0E'
-                          }}
-                        >
-                          {preset.name}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* Post Input */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className="text-sm font-semibold" style={{ color: '#FDBA4D' }}>Your Post Draft</label>
-                      <span className="text-sm" style={{ color: charCount > 280 ? '#FF6B6B' : charCount > 240 ? '#FFB84A' : '#FFFFFF' }}>{charCount}/280</span>
+              /* Post Optimizer View - Simplified Conversational Design */
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                {/* Main Column - Input & Results */}
+                <div className="lg:col-span-2 space-y-4">
+                  {/* Post Input Card */}
+                  <div className="rounded-xl p-5" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FFB84A', borderRadius: '16px' }}>
+                    <div className="flex justify-between items-center mb-3">
+                      <h3 className="text-lg font-semibold" style={{ color: '#FFB84A' }}>Your Post</h3>
+                      <span className="text-sm px-2 py-1 rounded" style={{
+                        backgroundColor: charCount > 280 ? '#FF6B6B' : charCount > 240 ? '#FFB84A' : '#2A2A2A',
+                        color: charCount > 280 || charCount > 240 ? '#0E0E0E' : '#FFFFFF'
+                      }}>{charCount}/280</span>
                     </div>
                     <textarea
                       value={draft}
-                      onChange={(e) => setDraft(e.target.value)}
-                      placeholder="Enter your post draft here..."
-                      className="w-full h-40 rounded-lg p-3 resize-none"
-                      style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                      onChange={(e) => { setDraft(e.target.value); setAnalysis(null); setAiAnalysis(null); }}
+                      placeholder="Paste or type your post here..."
+                      className="w-full h-32 rounded-lg p-4 resize-none text-base"
+                      style={{ backgroundColor: '#1A1A1A', border: '2px solid #2A2A2A', color: '#FFFFFF' }}
                     />
-                  </div>
 
-                  {/* Options */}
-                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                    <h3 className="text-sm font-semibold mb-4" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Post Options</h3>
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Goal</label>
-                        <select value={options.goal} onChange={(e) => setOptions({...options, goal: e.target.value})}
-                          className="w-full rounded-lg px-3 py-2 text-sm"
-                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
-                          <option value="awareness">Awareness</option>
-                          <option value="traffic">Traffic/Clicks</option>
-                          <option value="follows">Follows</option>
-                          <option value="engagement">Engagement</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Media Type</label>
-                        <select value={options.mediaType} onChange={(e) => setOptions({...options, mediaType: e.target.value})}
-                          className="w-full rounded-lg px-3 py-2 text-sm"
-                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
-                          <option value="none">Text Only</option>
-                          <option value="image">Image</option>
-                          <option value="video">Video</option>
-                          <option value="thread">Thread</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Tone</label>
-                        <select value={options.tone} onChange={(e) => setOptions({...options, tone: e.target.value})}
-                          className="w-full rounded-lg px-3 py-2 text-sm"
-                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
-                          <option value="announcement">Announcement</option>
-                          <option value="GM">GM Post</option>
-                          <option value="lore">Lore/Story</option>
-                          <option value="educational">Educational</option>
-                          <option value="meme">Meme/Fun</option>
-                        </select>
-                      </div>
-                      <div>
-                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Target Audience</label>
-                        <select value={options.targetAudience} onChange={(e) => setOptions({...options, targetAudience: e.target.value})}
-                          className="w-full rounded-lg px-3 py-2 text-sm"
-                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
-                          <option value="followers">Existing Followers</option>
-                          <option value="discovery">Discovery/New</option>
-                          <option value="mixed">Mixed</option>
-                        </select>
-                      </div>
-                    </div>
-                    <div className="mt-4">
-                      <label className="flex items-center gap-2 cursor-pointer">
+                    {/* Simple Options Row */}
+                    <div className="flex flex-wrap gap-3 mt-3">
+                      <label className="flex items-center gap-2 cursor-pointer text-sm" style={{ color: '#FFFFFF' }}>
+                        <input type="checkbox" checked={options.mediaType === 'image' || options.mediaType === 'video'}
+                          onChange={(e) => setOptions({...options, mediaType: e.target.checked ? 'image' : 'none'})}
+                          className="w-4 h-4 rounded" style={{ accentColor: '#89D005' }} />
+                        Adding media
+                      </label>
+                      <label className="flex items-center gap-2 cursor-pointer text-sm" style={{ color: '#FFFFFF' }}>
                         <input type="checkbox" checked={options.hasLink}
                           onChange={(e) => setOptions({...options, hasLink: e.target.checked})}
                           className="w-4 h-4 rounded" style={{ accentColor: '#89D005' }} />
-                        <span className="text-sm" style={{ color: '#FFFFFF' }}>Contains external link</span>
+                        Has link
                       </label>
                     </div>
+
+                    {/* Analyze Button */}
+                    <button onClick={handleAnalyze} disabled={!draft.trim() || isAnalyzing}
+                      className="w-full mt-4 py-4 rounded-xl font-bold text-lg transition-all disabled:cursor-not-allowed hover:opacity-90 flex items-center justify-center gap-3"
+                      style={{
+                        backgroundColor: draft.trim() && !isAnalyzing ? '#FFB84A' : '#2A2A2A',
+                        color: draft.trim() && !isAnalyzing ? '#0E0E0E' : '#FFFFFF',
+                        border: '3px solid #0E0E0E',
+                        opacity: draft.trim() && !isAnalyzing ? 1 : 0.5
+                      }}>
+                      {isAnalyzing ? (
+                        <>
+                          <div className="animate-spin w-5 h-5 border-2 border-t-transparent rounded-full" style={{ borderColor: '#0E0E0E', borderTopColor: 'transparent' }}></div>
+                          Analyzing...
+                        </>
+                      ) : '🚀 Analyze My Post'}
+                    </button>
                   </div>
 
-                  {/* Analyze Button */}
-                  <button onClick={handleAnalyze} disabled={!draft.trim() || isAnalyzing}
-                    className="w-full py-3 rounded-xl font-semibold transition-all disabled:cursor-not-allowed hover:opacity-90 flex items-center justify-center gap-2"
-                    style={{
-                      backgroundColor: draft.trim() && !isAnalyzing ? '#FFB84A' : '#2A2A2A',
-                      color: draft.trim() && !isAnalyzing ? '#0E0E0E' : '#FFFFFF',
-                      border: '3px solid #0E0E0E',
-                      opacity: draft.trim() && !isAnalyzing ? 1 : 0.5
-                    }}>
-                    {isAnalyzing && (
-                      <div className="animate-spin w-4 h-4 border-2 border-t-transparent rounded-full" style={{ borderColor: '#0E0E0E', borderTopColor: 'transparent' }}></div>
-                    )}
-                    {isAnalyzing ? 'Analyzing...' : 'Analyze & Optimize'}
-                  </button>
-                </div>
-
-                {/* Right Column - Analysis */}
-                <div className="space-y-6">
-                  {analysis ? (
-                    <>
-                      {/* Overall Score */}
-                      <div className="rounded-xl p-6" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                        <div className="flex items-center justify-between">
-                          <div>
-                            <h3 className="text-lg font-semibold" style={{ color: '#FDBA4D' }}>Virality Score</h3>
-                            <p className="text-sm mt-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Based on X Algorithm prediction factors</p>
-                          </div>
-                          <ScoreRing score={analysis.overall} size={100} strokeWidth={8} />
+                  {/* Results - Only show after analysis */}
+                  {(analysis || isAnalyzing) && (
+                    <div className="rounded-xl p-5" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                      {isAnalyzing ? (
+                        <div className="flex flex-col items-center justify-center py-12">
+                          <div className="animate-spin w-12 h-12 border-4 border-t-transparent rounded-full mb-4" style={{ borderColor: '#FFB84A', borderTopColor: 'transparent' }}></div>
+                          <p className="text-lg" style={{ color: '#FFB84A' }}>Analyzing your post...</p>
+                          <p className="text-sm mt-2" style={{ color: '#FFFFFF', opacity: 0.6 }}>Getting AI-powered recommendations</p>
                         </div>
-                        <div className="grid grid-cols-4 gap-3 mt-6">
-                          {[
-                            { key: 'engagement', label: 'Engage' },
-                            { key: 'contentQuality', label: 'Quality' },
-                            { key: 'mediaFormat', label: 'Format' },
-                            { key: 'linkHandling', label: 'Links' },
-                            { key: 'timing', label: 'Timing' },
-                            { key: 'safetyRisk', label: 'Safety' },
-                            { key: 'campaignStrategy', label: 'Campaign' }
-                          ].map(({ key, label }) => (
-                            <div key={key} className="text-center">
-                              <ScoreRing score={analysis[key]?.score || 0} size={45} strokeWidth={4} />
-                              <p className="text-xs mt-1" style={{ color: key === 'campaignStrategy' ? '#FFB84A' : '#FFFFFF', opacity: 0.7, fontWeight: key === 'campaignStrategy' ? 600 : 400 }}>{label}</p>
-                            </div>
-                          ))}
-                        </div>
-
-                        {/* Campaign Warnings */}
-                        {analysis.campaignStrategy?.warnings?.length > 0 && (
-                          <div className="mt-4 rounded-lg p-3" style={{ backgroundColor: '#FF6B6B', border: '3px solid #0E0E0E' }}>
-                            <p className="text-xs font-semibold mb-2" style={{ color: '#0E0E0E' }}>Campaign Warnings</p>
-                            {analysis.campaignStrategy.warnings.map((w, i) => (
-                              <div key={i} className="text-xs mb-1" style={{ color: '#0E0E0E' }}>
-                                - {w.message} | Fix: {w.fix}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-
-                      {/* Tabs */}
-                      <div className="flex gap-2" style={{ borderBottom: '4px solid #2A2A2A' }}>
-                        {['scores', 'variants', 'strategy', ...(apiKey ? ['ai'] : [])].map(tab => (
-                          <button key={tab} onClick={() => setActiveTab(tab)}
-                            className="px-4 py-2 text-sm font-medium transition-colors capitalize"
-                            style={{
-                              color: activeTab === tab ? '#FFB84A' : '#FFFFFF',
-                              borderBottom: activeTab === tab ? '4px solid #FFB84A' : '4px solid transparent',
-                              marginBottom: '-4px'
-                            }}>
-                            {tab === 'scores' ? 'Analysis' : tab === 'variants' ? 'Optimized' : tab === 'strategy' ? 'Strategy' : 'AI Insights'}
-                          </button>
-                        ))}
-                      </div>
-
-                      {/* Tab Content */}
-                      <div className="rounded-xl p-4 max-h-[400px] overflow-y-auto" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '12px' }}>
-                        {activeTab === 'scores' && (
-                          <div className="space-y-4">
-                            {Object.entries(analysis).filter(([k]) => k !== 'overall').map(([key, data]) => (
-                              <div key={key}>
-                                <h4 className="text-sm font-medium mb-2 capitalize" style={{ color: key === 'campaignStrategy' ? '#FFB84A' : '#FDBA4D' }}>
-                                  {key === 'campaignStrategy' ? 'Campaign Strategy' : key.replace(/([A-Z])/g, ' $1')}
-                                </h4>
-                                {/* Campaign warnings get special treatment */}
-                                {key === 'campaignStrategy' && data.warnings?.map((w, i) => (
-                                  <div key={`warn-${i}`} className="rounded p-2 mb-1 text-xs" style={{ backgroundColor: '#FF6B6B', border: '2px solid #0E0E0E' }}>
-                                    <span style={{ color: '#0E0E0E', fontWeight: 700 }}>Warning: {w.message}</span>
-                                    <p className="mt-1" style={{ color: '#0E0E0E' }}>Fix: {w.fix}</p>
-                                  </div>
-                                ))}
-                                {data.factors?.map((f, i) => (
-                                  <div key={i} className="rounded p-2 mb-1 text-xs" style={{ backgroundColor: '#2A2A2A' }}>
-                                    <span style={{ color: '#24E0FF' }}>{f.signal}</span>
-                                    <span className="ml-2" style={{ color: f.impact?.startsWith('+') ? '#89D005' : '#FF6B6B' }}>{f.impact}</span>
-                                    <p className="mt-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>{f.reason}</p>
-                                  </div>
-                                ))}
-                                {data.recommendations?.map((r, i) => (
-                                  <div key={i} className="rounded p-2 mb-1 text-xs" style={{ backgroundColor: '#89D005', border: '3px solid #0E0E0E', boxShadow: 'inset 0 2px 111px rgba(0, 0, 0, 0.45)' }}>
-                                    <span style={{ color: '#0E0E0E', fontWeight: 700 }}>{r.action}</span>
-                                    <p className="mt-1" style={{ color: '#0E0E0E' }}>{r.algorithmBenefit}</p>
-                                  </div>
-                                ))}
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {activeTab === 'variants' && (
-                          <div className="space-y-3">
-                            {variants.map((v, i) => (
-                              <div key={i} className="rounded-lg p-3" style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E' }}>
-                                <div className="flex justify-between mb-2">
-                                  <span className="text-sm font-medium" style={{ color: '#FDBA4D' }}>{v.type}</span>
-                                  <button onClick={() => handleCopy(v.content)} className="text-xs px-2 py-1 rounded hover:opacity-90" style={{ backgroundColor: '#FFB84A', color: '#0E0E0E', border: '2px solid #0E0E0E' }}>Copy</button>
-                                </div>
-                                <pre className="text-sm whitespace-pre-wrap font-sans p-2 rounded" style={{ backgroundColor: '#0E0E0E', color: '#FFFFFF' }}>{v.content}</pre>
-                                <p className="text-xs mt-2" style={{ color: '#89D005' }}>{v.expectedImpact}</p>
-                              </div>
-                            ))}
-                          </div>
-                        )}
-                        {activeTab === 'strategy' && (
-                          <div className="space-y-3 text-sm">
-                            {/* Campaign Status */}
-                            <div className="rounded p-3" style={{ backgroundColor: analysis.campaignStrategy?.score >= 80 ? '#89D005' : analysis.campaignStrategy?.score >= 60 ? '#FFB84A' : '#FF6B6B', border: '3px solid #0E0E0E' }}>
-                              <h4 className="font-medium mb-1" style={{ color: '#0E0E0E' }}>Campaign Status</h4>
-                              <p style={{ color: '#0E0E0E' }}>
-                                {analysis.campaignStrategy?.score >= 80 ? 'APPROVED - Ready to post' :
-                                 analysis.campaignStrategy?.score >= 60 ? 'NEEDS ADJUSTMENT - Review warnings' :
-                                 'NOT RECOMMENDED - Fix issues first'}
+                      ) : (
+                        <>
+                          {/* Score Header */}
+                          <div className="flex items-center justify-between mb-6 pb-4" style={{ borderBottom: '3px solid #2A2A2A' }}>
+                            <div>
+                              <h3 className="text-xl font-bold" style={{ color: analysis.overall >= 70 ? '#89D005' : analysis.overall >= 50 ? '#FFB84A' : '#FF6B6B' }}>
+                                {analysis.overall >= 70 ? '✓ Good to Post!' : analysis.overall >= 50 ? '⚠️ Needs Work' : '✗ Needs Major Changes'}
+                              </h3>
+                              <p className="text-sm mt-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>
+                                {analysis.overall >= 70 ? 'Your post is algorithm-optimized' : analysis.overall >= 50 ? 'A few tweaks will boost reach' : 'See recommendations below'}
                               </p>
                             </div>
-
-                            {/* Content Tier */}
-                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
-                              <h4 className="font-medium mb-1" style={{ color: '#FDBA4D' }}>Content Tier</h4>
-                              <p style={{ color: '#FFFFFF' }}>
-                                {analysis.campaignStrategy?.factors?.find(f => f.signal === 'Tier 1 Content') ? 'Tier 1 - Anchor Drop (standalone viable)' :
-                                 analysis.campaignStrategy?.factors?.find(f => f.signal === 'Tier 2 Content') ? 'Tier 2 - Supporting Item (pair with anchor)' :
-                                 'General Content'}
-                              </p>
-                            </div>
-
-                            {/* Recommended Day */}
-                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
-                              <h4 className="font-medium mb-1" style={{ color: '#FDBA4D' }}>Recommended Posting Day</h4>
-                              <p style={{ color: '#FFFFFF' }}>
-                                {analysis.campaignStrategy?.factors?.find(f => f.signal === 'Tier 1 Content') ? 'Monday or Tuesday (Anchor slot)' : 'Thursday (Deep Cut) or Saturday (Community)'}
-                              </p>
-                            </div>
-
-                            {/* Timing */}
-                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
-                              <h4 className="font-medium mb-2" style={{ color: '#FDBA4D' }}>Posting Strategy</h4>
-                              <div className="space-y-2 text-xs" style={{ color: '#FFFFFF' }}>
-                                <p>- <span style={{ color: '#FFB84A' }}>5pm EST:</span> Primary post (redemption sync)</p>
-                                <p>- <span style={{ color: '#FFB84A' }}>30-60 min:</span> Follow-up reply (detail/lore)</p>
-                                <p>- <span style={{ color: '#FFB84A' }}>Next day:</span> Quote or reply to reset discovery</p>
-                              </div>
-                            </div>
-
-                            {/* Format Suggestion */}
-                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
-                              <h4 className="font-medium mb-1" style={{ color: '#FDBA4D' }}>Format Rotation</h4>
-                              <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.8 }}>
-                                Alternate between: Statement, Question-led, Comparison, Lore tease, Mechanics, Prediction
-                              </p>
-                            </div>
-
-                            {/* Core Principle */}
-                            <div className="rounded p-3" style={{ backgroundColor: '#89D005', border: '3px solid #0E0E0E', boxShadow: 'inset 0 2px 111px rgba(0, 0, 0, 0.45)' }}>
-                              <p className="text-xs font-semibold" style={{ color: '#0E0E0E' }}>
-                                "This is not a reveal schedule - it's a narrative system. Treat it that way."
-                              </p>
+                            <div className="text-center">
+                              <ScoreRing score={analysis.overall} size={80} strokeWidth={6} />
+                              <p className="text-xs mt-1" style={{ color: '#FFFFFF', opacity: 0.6 }}>Virality Score</p>
                             </div>
                           </div>
-                        )}
-                        {activeTab === 'ai' && (
-                          <div className="space-y-3">
-                            {isAnalyzing ? (
-                              <div className="flex items-center justify-center py-8">
-                                <div className="flex items-center gap-3">
-                                  <div className="animate-spin w-6 h-6 border-2 border-t-transparent rounded-full" style={{ borderColor: '#FFB84A', borderTopColor: 'transparent' }}></div>
-                                  <span style={{ color: '#FFB84A' }}>Analyzing with AI...</span>
-                                </div>
-                              </div>
-                            ) : aiAnalysis ? (
-                              <div className="space-y-4">
-                                <div className="flex items-center gap-2 mb-4">
-                                  <div className="w-2 h-2 rounded-full" style={{ backgroundColor: '#89D005' }}></div>
-                                  <span className="text-sm font-medium" style={{ color: '#89D005' }}>AI-Powered Analysis</span>
-                                </div>
-                                <div className="prose prose-invert text-sm whitespace-pre-wrap" style={{ color: '#FFFFFF' }}>
-                                  {aiAnalysis}
+
+                          {/* Quick Issues - Most Important */}
+                          {(() => {
+                            const issues = [];
+                            if (options.hasLink) issues.push({ text: 'Links reduce reach ~30%', fix: 'Put link in reply instead', color: '#FF6B6B' });
+                            if (charCount > 280) issues.push({ text: 'Over character limit', fix: 'Trim to 280 characters', color: '#FF6B6B' });
+                            if (charCount > 200) issues.push({ text: 'Long posts get less engagement', fix: 'Aim for 100-200 characters', color: '#FFB84A' });
+                            if (!draft.includes('?')) issues.push({ text: 'No question = lower replies', fix: 'End with a question', color: '#FFB84A' });
+                            if ((draft.match(/#/g) || []).length >= 4) issues.push({ text: '4+ hashtags triggers spam filter', fix: 'Use 1-2 hashtags max', color: '#FF6B6B' });
+                            if (options.mediaType === 'none') issues.push({ text: 'Text-only gets less reach', fix: 'Add an image or video', color: '#FFB84A' });
+
+                            return issues.length > 0 ? (
+                              <div className="mb-6">
+                                <h4 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D' }}>Issues Found:</h4>
+                                <div className="space-y-2">
+                                  {issues.map((issue, i) => (
+                                    <div key={i} className="flex items-start gap-3 p-3 rounded-lg" style={{ backgroundColor: '#1A1A1A' }}>
+                                      <div className="w-2 h-2 rounded-full mt-1.5" style={{ backgroundColor: issue.color }}></div>
+                                      <div className="flex-1">
+                                        <p className="text-sm font-medium" style={{ color: issue.color }}>{issue.text}</p>
+                                        <p className="text-xs mt-1" style={{ color: '#89D005' }}>Fix: {issue.fix}</p>
+                                      </div>
+                                    </div>
+                                  ))}
                                 </div>
                               </div>
                             ) : (
-                              <div className="text-center py-8">
-                                <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.7 }}>
-                                  Click "Analyze & Optimize" to get AI-powered insights
+                              <div className="mb-6 p-4 rounded-lg" style={{ backgroundColor: '#89D005', border: '2px solid #0E0E0E' }}>
+                                <p className="text-sm font-semibold" style={{ color: '#0E0E0E' }}>✓ No major issues found! Your post follows algorithm best practices.</p>
+                              </div>
+                            );
+                          })()}
+
+                          {/* AI Optimized Version - The Star of the Show */}
+                          <div className="mb-4">
+                            <h4 className="text-sm font-semibold mb-3" style={{ color: '#89D005' }}>
+                              {aiAnalysis ? '✨ AI-Optimized Version:' : '✨ Optimized Versions:'}
+                            </h4>
+                            {aiAnalysis ? (
+                              <div className="rounded-lg p-4" style={{ backgroundColor: '#0A2A0A', border: '3px solid #89D005' }}>
+                                <p className="text-xs font-bold mb-3 px-2 py-1 rounded inline-block" style={{ backgroundColor: '#89D005', color: '#0E0E0E' }}>
+                                  READY TO POST
                                 </p>
+                                <pre className="text-base whitespace-pre-wrap font-sans mb-4 leading-relaxed" style={{ color: '#FFFFFF' }}>{aiAnalysis}</pre>
+                                <div className="flex justify-between items-center pt-3" style={{ borderTop: '2px solid #2A2A2A' }}>
+                                  <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.6 }}>{aiAnalysis.length}/280 chars</p>
+                                  <div className="flex gap-2">
+                                    <button onClick={() => { setDraft(aiAnalysis); setAnalysis(null); setAiAnalysis(null); }}
+                                      className="text-xs px-4 py-2 rounded hover:opacity-90"
+                                      style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '2px solid #3A3A3A' }}>
+                                      Edit This
+                                    </button>
+                                    <button onClick={() => handleCopy(aiAnalysis)}
+                                      className="text-sm px-6 py-2 rounded hover:opacity-90 font-bold"
+                                      style={{ backgroundColor: '#89D005', color: '#0E0E0E', border: '3px solid #0E0E0E' }}>
+                                      📋 Copy Post
+                                    </button>
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              <div className="space-y-3">
+                                {variants.slice(0, 2).map((v, i) => (
+                                  <div key={i} className="rounded-lg p-4" style={{ backgroundColor: i === 0 ? '#0A2A0A' : '#1A1A1A', border: i === 0 ? '3px solid #89D005' : '2px solid #2A2A2A' }}>
+                                    {i === 0 && <p className="text-xs font-bold mb-2 px-2 py-1 rounded inline-block" style={{ backgroundColor: '#89D005', color: '#0E0E0E' }}>RECOMMENDED</p>}
+                                    <pre className="text-sm whitespace-pre-wrap font-sans mb-3" style={{ color: '#FFFFFF' }}>{v.content}</pre>
+                                    <div className="flex justify-between items-center">
+                                      <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.6 }}>{v.content.length}/280 chars</p>
+                                      <div className="flex gap-2">
+                                        <button onClick={() => { setDraft(v.content); setAnalysis(null); }} className="text-xs px-3 py-1.5 rounded hover:opacity-90" style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '2px solid #3A3A3A' }}>
+                                          Edit
+                                        </button>
+                                        <button onClick={() => handleCopy(v.content)} className="text-xs px-4 py-1.5 rounded hover:opacity-90 font-semibold" style={{ backgroundColor: '#89D005', color: '#0E0E0E', border: '2px solid #0E0E0E' }}>
+                                          📋 Copy
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                ))}
                               </div>
                             )}
                           </div>
-                        )}
-                      </div>
-                    </>
-                  ) : (
-                    <div className="rounded-xl p-8 text-center" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
-                      <div className="text-6xl mb-4" style={{ color: '#FDBA4D' }}>+</div>
-                      <h3 className="text-lg font-semibold mb-2" style={{ color: '#FDBA4D' }}>Enter a post to analyze</h3>
-                      <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.7 }}>Get algorithm-aware recommendations based on the official X recommendation system.</p>
-                      <p className="text-sm mt-4" style={{ color: '#89D005' }}>Tip: Use the Strategy Builder to develop your idea first!</p>
+                        </>
+                      )}
                     </div>
                   )}
+
+                  {/* Empty State */}
+                  {!analysis && !isAnalyzing && (
+                    <div className="rounded-xl p-8 text-center" style={{ backgroundColor: '#0E0E0E', border: '3px dashed #2A2A2A', borderRadius: '16px' }}>
+                      <p className="text-4xl mb-3">📝</p>
+                      <h3 className="text-lg font-semibold mb-2" style={{ color: '#FDBA4D' }}>Paste your post above</h3>
+                      <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.6 }}>Get instant feedback + an optimized version to copy</p>
+                    </div>
+                  )}
+                </div>
+
+                {/* Sidebar - Quick Reference */}
+                <div className="space-y-4">
+                  {/* Algorithm Cheat Sheet */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #89D005', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#89D005' }}>Boost Your Score ↑</h3>
+                    <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                      <li className="flex justify-between"><span>End with a question</span><span style={{ color: '#89D005' }}>+12%</span></li>
+                      <li className="flex justify-between"><span>Add image</span><span style={{ color: '#89D005' }}>+15%</span></li>
+                      <li className="flex justify-between"><span>Add video</span><span style={{ color: '#89D005' }}>+20%</span></li>
+                      <li className="flex justify-between"><span>Use "we/our"</span><span style={{ color: '#89D005' }}>+8%</span></li>
+                      <li className="flex justify-between"><span>100-200 characters</span><span style={{ color: '#89D005' }}>optimal</span></li>
+                    </ul>
+                  </div>
+
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FF6B6B', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FF6B6B' }}>Kills Your Reach ↓</h3>
+                    <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                      <li className="flex justify-between"><span>Link in main post</span><span style={{ color: '#FF6B6B' }}>-30%</span></li>
+                      <li className="flex justify-between"><span>4+ hashtags</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
+                      <li className="flex justify-between"><span>"guaranteed", "100x"</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
+                      <li className="flex justify-between"><span>"like if", "RT for"</span><span style={{ color: '#FF6B6B' }}>spam</span></li>
+                      <li className="flex justify-between"><span>No engagement</span><span style={{ color: '#FF6B6B' }}>buried</span></li>
+                    </ul>
+                  </div>
+
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#FFB84A', border: '3px solid #0E0E0E', borderRadius: '16px' }}>
+                    <p className="text-xs font-bold" style={{ color: '#0E0E0E' }}>
+                      💡 Pro tip: The first 15-30 minutes matter most. Engage immediately after posting!
+                    </p>
+                  </div>
+
+                  {/* API Status */}
+                  {!apiKey && (
+                    <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px dashed #FFB84A', borderRadius: '16px' }}>
+                      <p className="text-xs" style={{ color: '#FFB84A' }}>
+                        🔑 Add your OpenAI API key for AI-powered optimizations
+                      </p>
+                      <button onClick={() => setShowApiSettings(true)} className="mt-2 text-xs px-3 py-1.5 rounded hover:opacity-90" style={{ backgroundColor: '#FFB84A', color: '#0E0E0E' }}>
+                        Add API Key
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </div>
                 </div>
               </div>
             )}
