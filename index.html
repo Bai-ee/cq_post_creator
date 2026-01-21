@@ -1,0 +1,2329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>X Post Optimizer - Critters Quest Edition</title>
+  <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Inter', sans-serif; }
+    h1, h2, h3, h4, h5, h6, .headline, .font-semibold {
+      font-family: 'Comic Sans MS', 'Comic Sans', 'Chalkboard SE', 'Marker Felt', cursive !important;
+    }
+    .score-ring { stroke-dasharray: 251.2; stroke-linecap: round; }
+    .chat-bubble { animation: fadeIn 0.3s ease-out; }
+    @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    .typing-indicator span { animation: blink 1.4s infinite both; }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes blink { 0%, 80%, 100% { opacity: 0; } 40% { opacity: 1; } }
+  </style>
+</head>
+<body class="min-h-screen" style="background-color: #0E0E0E; color: #FFFFFF;">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useCallback, useMemo, useEffect, useRef } = React;
+
+    // ============================================
+    // X ALGORITHM KNOWLEDGE BASE
+    // Based on: https://github.com/xai-org/x-algorithm
+    // ============================================
+
+    const X_ALGORITHM = {
+      predictions: [
+        'P(favorite)', 'P(reply)', 'P(repost)', 'P(quote)', 'P(click)',
+        'P(profile_click)', 'P(video_view)', 'P(photo_expand)', 'P(share)',
+        'P(dwell)', 'P(follow_author)', 'P(not_interested)', 'P(block_author)',
+        'P(mute_author)', 'P(report)'
+      ],
+      preScoreFilters: [
+        'DropDuplicatesFilter', 'CoreDataHydrationFilter', 'AgeFilter',
+        'SelfpostFilter', 'RepostDeduplicationFilter', 'IneligibleSubscriptionFilter',
+        'PreviouslySeenPostsFilter', 'PreviouslyServedPostsFilter',
+        'MutedKeywordFilter', 'AuthorSocialgraphFilter'
+      ],
+      postSelectionFilters: ['VFFilter', 'DedupConversationFilter'],
+      pipelineStages: [
+        'Query Hydration', 'Candidate Sourcing (Thunder + Phoenix)',
+        'Candidate Hydration', 'Pre-Scoring Filters', 'Scoring',
+        'Selection', 'Post-Selection Processing'
+      ]
+    };
+
+    // ============================================
+    // CAMPAIGN STRATEGY SYSTEM
+    // Item Reveal Campaign Rules & Constraints
+    // ============================================
+
+    const CAMPAIGN_RULES = {
+      // Cadence constraints - prevent daily spam
+      cadence: {
+        maxPostsPerWeek: 3,
+        minDaysBetweenPosts: 2,
+        weeklyPattern: {
+          anchor: { days: ['Monday', 'Tuesday'], role: 'Anchor Reveal (Set / Theme)' },
+          deepCut: { days: ['Thursday'], role: 'Deep Cut (1-2 items, lore or mechanics)' },
+          community: { days: ['Saturday'], role: 'Community Hook (poll / choice / guess)', optional: true }
+        }
+      },
+
+      // Content hierarchy - enforced tiers
+      contentTiers: {
+        tier1: {
+          name: 'Anchor Drops',
+          types: ['full sets', 'legendary collections', 'town skins', 'Dragon Gear', 'The Ultimate Nightmare'],
+          treatment: 'Prime time, strongest hooks, clean copy',
+          standalone: true
+        },
+        tier2: {
+          name: 'Supporting Drops',
+          types: ['weapons', 'shields', 'variants', 'individual items'],
+          treatment: 'Must attach to an Anchor week',
+          standalone: false,
+          warning: 'No standalone hype posts allowed for Tier 2 items'
+        }
+      },
+
+      // Disallowed phrases that signal drip-feed
+      disallowedPhrases: [
+        'Item #1', 'Item #', 'daily reveal', 'first of many', 'day 1', 'day one',
+        'reveal #', 'drop #', 'today we reveal', 'another reveal'
+      ],
+
+      // Approved opening angles
+      approvedOpenings: [
+        'This is what the Gacha Wheel has been hiding.',
+        'The vault opens.',
+        'What lies beneath the surface.',
+        'Some things were meant to be discovered.',
+        'The collection grows.'
+      ],
+
+      // Format rotation - prevent repetition
+      formatTypes: [
+        { id: 'statement', name: 'Statement reveal', example: 'Direct announcement of item/set' },
+        { id: 'question', name: 'Question-led reveal', example: 'What would you do with unlimited power?' },
+        { id: 'comparison', name: 'Comparison', example: 'Which would you spin for?' },
+        { id: 'lore', name: 'Lore tease', example: 'Story/background of the item' },
+        { id: 'mechanics', name: 'Mechanics tease', example: 'Hidden stats / silhouettes' },
+        { id: 'prediction', name: 'Community prediction', example: 'Guess what drops next' }
+      ],
+
+      // Required engagement triggers
+      engagementTriggers: [
+        'choice', 'guess', 'comparison', 'forward tease', 'poll', 'question'
+      ],
+
+      // Timing rules (5pm EST event sync)
+      timing: {
+        primaryPost: '5pm EST',
+        followUp: '30-60 min after primary',
+        nextDayBoost: 'Reply or quote next day to reset discovery'
+      },
+
+      // Campaign arc (60-90 days)
+      campaignArc: [
+        { weeks: '1-3', focus: 'Core sets (value anchoring)' },
+        { weeks: '4-6', focus: 'Variants + weapons' },
+        { weeks: '7-9', focus: 'Skins + town aesthetics' },
+        { weeks: 'ongoing', focus: 'Legendary callbacks + comparisons' }
+      ]
+    };
+
+    // Campaign validation function
+    const validateCampaignPost = (content, options = {}) => {
+      const warnings = [];
+      const suggestions = [];
+      const contentLower = content.toLowerCase();
+
+      // Check for disallowed phrases
+      CAMPAIGN_RULES.disallowedPhrases.forEach(phrase => {
+        if (contentLower.includes(phrase.toLowerCase())) {
+          warnings.push({
+            type: 'disallowed_phrase',
+            severity: 'high',
+            message: `Avoid "${phrase}" - signals drip-feed, reduces reach`,
+            fix: 'Use value-anchoring language instead'
+          });
+        }
+      });
+
+      // Check for engagement trigger
+      const hasEngagementTrigger =
+        content.includes('?') ||
+        /which|what|how|who|guess|predict|choose|pick|vote/i.test(content) ||
+        /tomorrow|next|coming soon/i.test(content);
+
+      if (!hasEngagementTrigger) {
+        warnings.push({
+          type: 'missing_engagement',
+          severity: 'medium',
+          message: 'No engagement trigger detected',
+          fix: 'Add a choice, guess, comparison, or forward tease'
+        });
+      }
+
+      // Check content tier
+      const isTier1 = CAMPAIGN_RULES.contentTiers.tier1.types.some(t =>
+        contentLower.includes(t.toLowerCase())
+      );
+      const isTier2 = CAMPAIGN_RULES.contentTiers.tier2.types.some(t =>
+        contentLower.includes(t.toLowerCase())
+      );
+
+      if (isTier2 && !isTier1) {
+        suggestions.push({
+          type: 'tier_warning',
+          message: 'This appears to be a Tier 2 item (weapon/shield/variant)',
+          recommendation: 'Consider pairing with an Anchor drop or framing within a larger set reveal'
+        });
+      }
+
+      // Suggest timing
+      suggestions.push({
+        type: 'timing',
+        message: 'Optimal posting: 5pm EST (redemption sync)',
+        recommendation: 'Follow up 30-60 min later with detail or lore reply'
+      });
+
+      return { warnings, suggestions, isTier1, isTier2 };
+    };
+
+    // ============================================
+    // STRATEGY BUILDER AI ENGINE
+    // ============================================
+
+    const STRATEGY_PROMPTS = {
+      initial: {
+        questions: [
+          "What's the main thing you want to communicate or achieve?",
+          "Who is your target audience for this?",
+          "What action do you want people to take after seeing this?"
+        ]
+      },
+      clarifying: {
+        audience: [
+          "Is this for existing followers or trying to reach new people?",
+          "What's their familiarity with Critters Quest?",
+          "Are they mostly gamers, collectors, or investors?"
+        ],
+        tone: [
+          "Should this feel exciting/hype, informative, or casual/friendly?",
+          "Is there urgency to this message?",
+          "Should we lean into mystery/curiosity or be direct?"
+        ],
+        content: [
+          "What specific details or numbers can we include?",
+          "Is there a visual element (screenshot, art, video) to pair with this?",
+          "Any previous posts this should connect to or reference?"
+        ]
+      },
+      refinement: [
+        "Does this capture your intent? What would you change?",
+        "Is there anything we're missing or should emphasize more?",
+        "Which version resonates most with you?"
+      ]
+    };
+
+    const analyzeIdea = (idea, context = {}) => {
+      const analysis = {
+        coreMessage: '',
+        suggestedAngles: [],
+        audienceInsights: [],
+        algorithmTips: [],
+        questions: []
+      };
+
+      const ideaLower = idea.toLowerCase();
+
+      // Detect content type
+      if (/launch|release|ship|live|announcing|new/.test(ideaLower)) {
+        analysis.coreMessage = 'Product/Feature Announcement';
+        analysis.suggestedAngles = [
+          { angle: 'Hype Builder', desc: 'Build excitement with bold claims and visuals' },
+          { angle: 'Community First', desc: 'Frame as something built for/with the community' },
+          { angle: 'Behind the Scenes', desc: 'Share the journey of building this' },
+          { angle: 'Problem-Solution', desc: 'Show what problem this solves' }
+        ];
+        analysis.algorithmTips.push('Announcement posts with visuals get +15 P(photo_expand)');
+        analysis.algorithmTips.push('Use "we" language to boost P(follow_author) by +8');
+      } else if (/update|improve|fix|change|patch/.test(ideaLower)) {
+        analysis.coreMessage = 'Update/Improvement';
+        analysis.suggestedAngles = [
+          { angle: 'Player Impact', desc: 'Focus on how this improves player experience' },
+          { angle: 'Listening to Feedback', desc: 'Show you heard community requests' },
+          { angle: 'Technical Deep Dive', desc: 'Share interesting details for engaged fans' }
+        ];
+        analysis.algorithmTips.push('Updates with specific numbers get +8 quality score');
+      } else if (/lore|story|world|character|quest/.test(ideaLower)) {
+        analysis.coreMessage = 'Lore/World Building';
+        analysis.suggestedAngles = [
+          { angle: 'Mystery Teaser', desc: 'Hint at something bigger without revealing all' },
+          { angle: 'Character Spotlight', desc: 'Deep dive on a specific character/element' },
+          { angle: 'Community Theory', desc: 'Acknowledge and play with fan theories' }
+        ];
+        analysis.algorithmTips.push('Mystery/curiosity language boosts P(dwell) significantly');
+        analysis.algorithmTips.push('Thread format ideal for lore - increases P(click) by +10');
+      } else if (/community|player|holder|fren|gm/.test(ideaLower)) {
+        analysis.coreMessage = 'Community Engagement';
+        analysis.suggestedAngles = [
+          { angle: 'Celebration', desc: 'Highlight community achievements or milestones' },
+          { angle: 'Gratitude', desc: 'Thank the community for support' },
+          { angle: 'Interactive', desc: 'Ask for input, opinions, or content' }
+        ];
+        analysis.algorithmTips.push('Questions boost P(reply) by +12');
+        analysis.algorithmTips.push('Community language ("we", "our", "together") boosts P(follow_author)');
+      } else if (/token|mint|sale|price|reward/.test(ideaLower)) {
+        analysis.coreMessage = 'Token/Economic Update';
+        analysis.suggestedAngles = [
+          { angle: 'Value Proposition', desc: 'Focus on utility and player benefit' },
+          { angle: 'Educational', desc: 'Explain mechanics clearly' },
+          { angle: 'Milestone', desc: 'Frame around achievement or goal' }
+        ];
+        analysis.algorithmTips.push('Avoid spam words like "guaranteed", "100x" - triggers P(report)');
+        analysis.algorithmTips.push('Use "early access" instead of "whitelist" to avoid MutedKeywordFilter');
+        analysis.audienceInsights.push('Be careful: token talk can trigger muted keywords for some users');
+      } else {
+        analysis.coreMessage = 'General Update';
+        analysis.suggestedAngles = [
+          { angle: 'News Style', desc: 'Direct and informative' },
+          { angle: 'Conversational', desc: 'Casual and engaging' },
+          { angle: 'Teaser', desc: 'Build curiosity for more' }
+        ];
+      }
+
+      // Generate contextual questions
+      if (!context.audience) {
+        analysis.questions.push("Who specifically should see this? (existing players, potential new players, investors, general crypto/gaming audience)");
+      }
+      if (!context.goal) {
+        analysis.questions.push("What's the #1 thing you want someone to do after reading this?");
+      }
+      if (!context.tone) {
+        analysis.questions.push("What vibe should this have? (Hype/exciting, Casual/friendly, Professional/informative, Mysterious/intriguing)");
+      }
+      if (!context.hasVisual) {
+        analysis.questions.push("Do you have an image, video, or GIF to pair with this?");
+      }
+
+      return analysis;
+    };
+
+    const generateStrategyDrafts = (idea, context, angle) => {
+      const drafts = [];
+
+      // Generate based on angle
+      if (angle === 'Hype Builder') {
+        drafts.push({
+          style: 'Bold Announcement',
+          content: `${context.headline || 'Big news'}\n\n${idea}\n\nThis changes everything. Ready?`,
+          reasoning: 'Strong opener for P(dwell), question for P(reply)'
+        });
+        drafts.push({
+          style: 'Countdown Energy',
+          content: `It's happening.\n\n${idea}\n\nWho's ready?`,
+          reasoning: 'Mystery + question combo maximizes engagement signals'
+        });
+      } else if (angle === 'Community First') {
+        drafts.push({
+          style: 'We Built This',
+          content: `You asked, we delivered.\n\n${idea}\n\nBuilt for our community. What do you think?`,
+          reasoning: '"We" language for P(follow_author), question for P(reply)'
+        });
+        drafts.push({
+          style: 'Celebration',
+          content: `Critters fam\n\n${idea}\n\nCouldn't have done this without you. What feature should we tackle next?`,
+          reasoning: 'Community language + forward-looking question'
+        });
+      } else if (angle === 'Behind the Scenes') {
+        drafts.push({
+          style: 'Build in Public',
+          content: `Building in public\n\n${idea}\n\nHere's what we learned along the way:\n\n(thread incoming)`,
+          reasoning: 'Thread teaser for P(click), authentic tone for P(follow_author)'
+        });
+      } else if (angle === 'Mystery Teaser') {
+        drafts.push({
+          style: 'Cryptic Reveal',
+          content: `Something stirs in the depths...\n\n${idea}\n\nThe story continues.`,
+          reasoning: 'Mystery language maximizes P(dwell) and curiosity clicks'
+        });
+        drafts.push({
+          style: 'Lore Fragment',
+          content: `New lore unlocked\n\n"${idea}"\n\nWhat do you think this means for the Critters?`,
+          reasoning: 'Lore framing + speculation question for P(reply)'
+        });
+      } else {
+        // Default drafts
+        drafts.push({
+          style: 'Direct & Clear',
+          content: `${idea}\n\nThoughts?`,
+          reasoning: 'Simple and effective with P(reply) hook'
+        });
+        drafts.push({
+          style: 'Conversational',
+          content: `Quick update:\n\n${idea}\n\nMore details coming soon.`,
+          reasoning: 'Casual tone with curiosity teaser'
+        });
+      }
+
+      return drafts;
+    };
+
+    // ============================================
+    // ANALYSIS ENGINE (existing)
+    // ============================================
+
+    const analyzePost = (draft, options = {}) => {
+      const { goal = 'awareness', mediaType = 'none', tone = 'announcement', targetAudience = 'mixed', hasLink = false } = options;
+
+      const scores = {
+        overall: 0,
+        engagement: { score: 0, factors: [], recommendations: [] },
+        contentQuality: { score: 0, factors: [], recommendations: [] },
+        mediaFormat: { score: 0, factors: [], recommendations: [] },
+        linkHandling: { score: 0, factors: [], recommendations: [] },
+        timing: { score: 0, factors: [], recommendations: [] },
+        safetyRisk: { score: 0, factors: [], recommendations: [] },
+        campaignStrategy: { score: 0, factors: [], recommendations: [], warnings: [] }
+      };
+
+      // Run campaign validation
+      const campaignValidation = validateCampaignPost(draft, options);
+
+      // Add campaign warnings to strategy score
+      let campaignScore = 100;
+      campaignValidation.warnings.forEach(w => {
+        if (w.severity === 'high') campaignScore -= 25;
+        else if (w.severity === 'medium') campaignScore -= 15;
+        scores.campaignStrategy.warnings.push(w);
+      });
+
+      // Add campaign factors
+      if (campaignValidation.isTier1) {
+        scores.campaignStrategy.factors.push({ signal: 'Tier 1 Content', impact: '+15', reason: 'Anchor drop - standalone viable' });
+        campaignScore += 15;
+      }
+      if (campaignValidation.isTier2 && !campaignValidation.isTier1) {
+        scores.campaignStrategy.factors.push({ signal: 'Tier 2 Content', impact: '-10', reason: 'Supporting item - needs anchor context' });
+        campaignScore -= 10;
+      }
+
+      // Add campaign suggestions as recommendations
+      campaignValidation.suggestions.forEach(s => {
+        scores.campaignStrategy.recommendations.push({
+          action: s.message,
+          algorithmBenefit: s.recommendation
+        });
+      });
+
+      scores.campaignStrategy.score = Math.max(0, Math.min(100, campaignScore));
+
+      const text = draft.toLowerCase();
+      const charCount = draft.length;
+      const first120 = draft.substring(0, 120);
+
+      // Engagement Analysis
+      let engagementScore = 50;
+      if (/\?/.test(draft)) {
+        engagementScore += 12;
+        scores.engagement.factors.push({ signal: 'P(reply)', impact: '+12', reason: 'Question marks trigger conversation' });
+      } else {
+        scores.engagement.recommendations.push({ action: 'Add a question', algorithmBenefit: 'Questions increase P(reply) predictions', example: 'End with: "What do you think?"' });
+      }
+      if (/\b(check out|try|join|follow|see|discover|explore)\b/i.test(draft)) {
+        engagementScore += 8;
+        scores.engagement.factors.push({ signal: 'P(click)', impact: '+8', reason: 'Clear CTA language' });
+      }
+      if (/\b(what do you think|thoughts\?|who else|agree\?)\b/i.test(draft)) {
+        engagementScore += 10;
+        scores.engagement.factors.push({ signal: 'P(reply) + P(quote)', impact: '+10', reason: 'Conversation hooks' });
+      }
+      if (/\b(excited|huge|incredible|finally|secret|exclusive)\b/i.test(draft)) {
+        engagementScore += 7;
+        scores.engagement.factors.push({ signal: 'P(favorite) + P(dwell)', impact: '+7', reason: 'Emotional language' });
+      }
+      if (/\b(we|our|together|community|fam|frens|gm)\b/i.test(draft)) {
+        engagementScore += 8;
+        scores.engagement.factors.push({ signal: 'P(follow_author)', impact: '+8', reason: 'Community language' });
+      }
+      scores.engagement.score = Math.min(100, engagementScore);
+
+      // Content Quality
+      let qualityScore = 60;
+      if (/\b(new|update|launch|feature|announcing)\b/i.test(draft)) {
+        qualityScore += 10;
+        scores.contentQuality.factors.push({ signal: 'Content value', impact: '+10', reason: 'Informational content' });
+      }
+      if (/\d+/.test(draft)) {
+        qualityScore += 8;
+        scores.contentQuality.factors.push({ signal: 'Specificity', impact: '+8', reason: 'Contains specific data' });
+      }
+      if (/\b(buy now|limited time|100x|guaranteed)\b/i.test(draft)) {
+        qualityScore -= 25;
+        scores.contentQuality.factors.push({ signal: 'P(report)', impact: '-25', reason: 'Spam language detected' });
+      }
+      scores.contentQuality.score = Math.max(0, Math.min(100, qualityScore));
+
+      // Format Analysis
+      let formatScore = 50;
+      if (/^(NEW|BREAKING|HUGE|FINALLY|JUST)/i.test(first120)) formatScore += 8;
+      if (/[\u{1F300}-\u{1F9FF}]/u.test(first120)) formatScore += 5;
+      if (mediaType === 'video') formatScore += 20;
+      else if (mediaType === 'image') formatScore += 15;
+      else if (mediaType === 'thread') formatScore += 10;
+      if (charCount >= 100 && charCount <= 200) formatScore += 10;
+      scores.mediaFormat.score = Math.min(100, formatScore);
+
+      // Link Handling
+      let linkScore = hasLink ? 40 : 70;
+      if (hasLink) {
+        scores.linkHandling.factors.push({ signal: 'External link', impact: '-30', reason: 'External links reduce reach' });
+        scores.linkHandling.recommendations.push({ action: 'Use reply-link strategy', algorithmBenefit: 'Put link in reply', example: 'Main tweet clean, link in first reply' });
+      }
+      scores.linkHandling.score = Math.max(0, Math.min(100, linkScore));
+
+      // Timing
+      let timingScore = 60;
+      if (/\b(today|now|just|breaking|happening)\b/i.test(draft)) timingScore += 15;
+      if (/\bgm\b/i.test(draft) && tone === 'GM') timingScore += 10;
+      scores.timing.score = Math.min(100, timingScore);
+
+      // Safety
+      let safetyScore = 100;
+      const hashtags = (draft.match(/#\w+/g) || []);
+      if (hashtags.length > 3) safetyScore -= (hashtags.length - 3) * 8;
+      if (/\b(like if|rt if|follow for)\b/i.test(draft)) safetyScore -= 20;
+      if (/\b(airdrop|whitelist|presale|floor price)\b/i.test(draft)) safetyScore -= 10;
+      scores.safetyRisk.score = Math.max(0, safetyScore);
+
+      // Overall (including campaign strategy weight)
+      scores.overall = Math.round(
+        scores.engagement.score * 0.25 + scores.contentQuality.score * 0.20 +
+        scores.mediaFormat.score * 0.10 + scores.linkHandling.score * 0.10 +
+        scores.timing.score * 0.10 + scores.safetyRisk.score * 0.10 +
+        scores.campaignStrategy.score * 0.15
+      );
+
+      return scores;
+    };
+
+    const generateOptimizedVariants = (draft, analysis, options) => {
+      const variants = [];
+      const { tone } = options;
+
+      let primary = draft;
+      if (analysis.engagement.score < 70 && !draft.includes('?')) {
+        primary = primary.trim() + '\n\nThoughts?';
+      }
+      if (tone === 'GM' && !/\bgm\b/i.test(primary)) {
+        primary = 'gm frens\n\n' + primary;
+      }
+      variants.push({ type: 'Primary Optimized', content: primary, changes: ['Added engagement hook'], expectedImpact: '+15-25% engagement' });
+
+      const sentences = draft.split(/[.!?]+/).filter(s => s.trim());
+      if (sentences.length > 1) {
+        variants.push({
+          type: 'Short & Punchy',
+          content: sentences[0].trim() + '.\n\nMore soon.',
+          changes: ['Condensed message'],
+          expectedImpact: 'Higher completion rate'
+        });
+      }
+
+      variants.push({
+        type: 'Conversation Starter',
+        content: draft.trim() + '\n\nWhat would you add?',
+        changes: ['Added reply hook'],
+        expectedImpact: 'Increases P(reply)'
+      });
+
+      if (draft.length > 150) {
+        variants.push({
+          type: 'Thread Opener',
+          content: 'Thread: ' + sentences[0].trim() + '\n\n(1/' + Math.ceil(sentences.length / 2) + ')',
+          changes: ['Thread format'],
+          expectedImpact: 'Better for long-form'
+        });
+      }
+
+      return variants;
+    };
+
+    // ============================================
+    // UI COMPONENTS
+    // ============================================
+
+    const ScoreRing = ({ score, size = 80, strokeWidth = 6 }) => {
+      const radius = (size - strokeWidth) / 2;
+      const circumference = radius * 2 * Math.PI;
+      const offset = circumference - (score / 100) * circumference;
+      // Brand colors: Green for high, Yellow for medium, Red for low
+      const getColor = (s) => s >= 80 ? '#89D005' : s >= 60 ? '#FFB84A' : s >= 40 ? '#FDBA4D' : '#FF6B6B';
+
+      return (
+        <div className="flex flex-col items-center relative">
+          <svg width={size} height={size} className="transform -rotate-90">
+            <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke="#2A2A2A" strokeWidth={strokeWidth} />
+            <circle cx={size/2} cy={size/2} r={radius} fill="none" stroke={getColor(score)} strokeWidth={strokeWidth}
+              strokeDasharray={circumference} strokeDashoffset={offset} className="score-ring transition-all duration-500" />
+          </svg>
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="text-xl font-bold" style={{ color: '#FFFFFF' }}>{score}</span>
+          </div>
+        </div>
+      );
+    };
+
+    const ChatMessage = ({ message, isUser, isTyping }) => (
+      <div className={`chat-bubble flex ${isUser ? 'justify-end' : 'justify-start'} mb-3`}>
+        <div className={`max-w-[85%] rounded-2xl px-4 py-3`} style={{
+          backgroundColor: isUser ? '#FFB84A' : '#2A2A2A',
+          color: isUser ? '#0E0E0E' : '#FFFFFF',
+          border: '3px solid #0E0E0E'
+        }}>
+          {isTyping ? (
+            <div className="typing-indicator flex gap-1">
+              <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+              <span className="w-2 h-2 bg-gray-400 rounded-full"></span>
+            </div>
+          ) : (
+            <div className="text-sm whitespace-pre-wrap">{message}</div>
+          )}
+        </div>
+      </div>
+    );
+
+    const AngleCard = ({ angle, desc, selected, onClick }) => (
+      <button
+        onClick={onClick}
+        className="text-left p-3 rounded-lg transition-all"
+        style={{
+          backgroundColor: selected ? '#89D005' : '#0E0E0E',
+          border: selected ? '3px solid #0E0E0E' : '3px solid #2A2A2A',
+          color: selected ? '#0E0E0E' : '#FFFFFF',
+          borderRadius: '12px'
+        }}
+      >
+        <p className="font-medium text-sm" style={{ color: selected ? '#0E0E0E' : '#FDBA4D' }}>{angle}</p>
+        <p className="text-xs mt-1" style={{ color: selected ? '#0E0E0E' : '#FFFFFF', opacity: selected ? 0.8 : 0.7 }}>{desc}</p>
+      </button>
+    );
+
+    const DraftCard = ({ draft, onUse, onEdit }) => (
+      <div className="rounded-lg p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '12px' }}>
+        <div className="flex justify-between items-start mb-2">
+          <span className="text-xs font-medium" style={{ color: '#FDBA4D' }}>{draft.style}</span>
+          <div className="flex gap-2">
+            <button onClick={() => onEdit(draft.content)} className="text-xs hover:opacity-80" style={{ color: '#FFFFFF' }}>Edit</button>
+            <button onClick={() => onUse(draft.content)} className="text-xs px-2 py-1 rounded hover:opacity-90" style={{ backgroundColor: '#FFB84A', color: '#0E0E0E', border: '2px solid #0E0E0E' }}>Use This</button>
+          </div>
+        </div>
+        <pre className="text-sm whitespace-pre-wrap p-3 rounded mb-2 font-sans" style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF' }}>{draft.content}</pre>
+        <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.7 }}>{draft.reasoning}</p>
+      </div>
+    );
+
+    const StrategyPlanCard = ({ plan, onExport }) => (
+      <div className="rounded-xl p-5" style={{ backgroundColor: '#89D005', border: '3px solid #0E0E0E', borderRadius: '16px', boxShadow: 'inset 0 2px 111px rgba(0, 0, 0, 0.45)' }}>
+        <div className="flex justify-between items-start mb-4">
+          <h3 className="text-lg font-semibold" style={{ color: '#0E0E0E' }}>Your Marketing Strategy</h3>
+          <button onClick={onExport} className="text-xs px-3 py-1.5 rounded-lg hover:opacity-90" style={{ backgroundColor: '#FFB84A', color: '#0E0E0E', border: '3px solid #0E0E0E' }}>
+            Export to Post Optimizer
+          </button>
+        </div>
+
+        <div className="space-y-4">
+          <div>
+            <h4 className="text-sm font-medium mb-1" style={{ color: '#0E0E0E', fontWeight: 700 }}>Core Message</h4>
+            <p className="text-sm" style={{ color: '#0E0E0E' }}>{plan.coreMessage}</p>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium mb-1" style={{ color: '#0E0E0E', fontWeight: 700 }}>Target Audience</h4>
+            <p className="text-sm" style={{ color: '#0E0E0E' }}>{plan.audience}</p>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium mb-1" style={{ color: '#0E0E0E', fontWeight: 700 }}>Chosen Angle</h4>
+            <p className="text-sm" style={{ color: '#0E0E0E' }}>{plan.angle}</p>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium mb-2" style={{ color: '#0E0E0E', fontWeight: 700 }}>Final Drafts</h4>
+            <div className="space-y-2">
+              {plan.drafts.map((d, i) => (
+                <div key={i} className="rounded-lg p-3" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A' }}>
+                  <p className="text-xs mb-1" style={{ color: '#FDBA4D' }}>{d.style}</p>
+                  <pre className="text-sm whitespace-pre-wrap font-sans" style={{ color: '#FFFFFF' }}>{d.content}</pre>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <h4 className="text-sm font-medium mb-1" style={{ color: '#0E0E0E', fontWeight: 700 }}>Algorithm Tips</h4>
+            <ul className="text-xs space-y-1" style={{ color: '#0E0E0E' }}>
+              {plan.algorithmTips.map((tip, i) => (
+                <li key={i}>- {tip}</li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      </div>
+    );
+
+    // ============================================
+    // STRATEGY BUILDER COMPONENT
+    // ============================================
+
+    const StrategyBuilder = ({ onExportToOptimizer }) => {
+      const [messages, setMessages] = useState([
+        { id: 1, text: "Hey! I'm here to help you craft an algorithm-optimized marketing strategy.\n\nShare your idea, announcement, or what you want to communicate, and I'll help you develop it into high-performing X posts.", isUser: false }
+      ]);
+      const [input, setInput] = useState('');
+      const [isTyping, setIsTyping] = useState(false);
+      const [conversationState, setConversationState] = useState('initial'); // initial, analyzing, angles, drafts, refining, complete
+      const [context, setContext] = useState({});
+      const [analysis, setAnalysis] = useState(null);
+      const [selectedAngle, setSelectedAngle] = useState(null);
+      const [drafts, setDrafts] = useState([]);
+      const [finalPlan, setFinalPlan] = useState(null);
+      const chatEndRef = useRef(null);
+
+      useEffect(() => {
+        chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+      }, [messages]);
+
+      const addMessage = (text, isUser = false) => {
+        setMessages(prev => [...prev, { id: Date.now(), text, isUser }]);
+      };
+
+      const simulateTyping = async (callback, delay = 1000) => {
+        setIsTyping(true);
+        await new Promise(r => setTimeout(r, delay));
+        setIsTyping(false);
+        callback();
+      };
+
+      const handleSend = async () => {
+        if (!input.trim()) return;
+        const userInput = input.trim();
+        setInput('');
+        addMessage(userInput, true);
+
+        if (conversationState === 'initial') {
+          // Analyze the initial idea
+          await simulateTyping(() => {
+            const ideaAnalysis = analyzeIdea(userInput, context);
+            setAnalysis(ideaAnalysis);
+            setContext(prev => ({ ...prev, originalIdea: userInput }));
+
+            addMessage(`Great! I see this as a **${ideaAnalysis.coreMessage}**.\n\nI've identified several angles we could take:\n\n${ideaAnalysis.suggestedAngles.map(a => `- **${a.angle}**: ${a.desc}`).join('\n')}\n\n${ideaAnalysis.algorithmTips.length ? '\nAlgorithm insights:\n' + ideaAnalysis.algorithmTips.map(t => `- ${t}`).join('\n') : ''}`);
+
+            setConversationState('angles');
+          }, 1500);
+
+        } else if (conversationState === 'clarifying') {
+          // Process clarifying answer
+          setContext(prev => ({ ...prev, clarification: userInput }));
+          await simulateTyping(() => {
+            const updatedAnalysis = analyzeIdea(context.originalIdea, { ...context, clarification: userInput });
+            setAnalysis(updatedAnalysis);
+            addMessage(`Perfect, that helps! Here are the angles I'd suggest:\n\n${updatedAnalysis.suggestedAngles.map(a => `- **${a.angle}**: ${a.desc}`).join('\n')}\n\nSelect an angle below, or tell me if you have a different direction in mind.`);
+            setConversationState('angles');
+          }, 1200);
+
+        } else if (conversationState === 'angles') {
+          // User is giving custom angle direction
+          setSelectedAngle(userInput);
+          setContext(prev => ({ ...prev, customAngle: userInput }));
+          await simulateTyping(() => {
+            const generatedDrafts = generateStrategyDrafts(context.originalIdea, context, userInput);
+            setDrafts(generatedDrafts);
+            addMessage(`I like that direction! Here are some draft options based on "${userInput}":\n\nSelect one to refine, or tell me what you'd change.`);
+            setConversationState('drafts');
+          }, 1500);
+
+        } else if (conversationState === 'drafts' || conversationState === 'refining') {
+          // User is providing feedback on drafts
+          await simulateTyping(() => {
+            // Incorporate feedback into new drafts
+            const refinedDrafts = [
+              {
+                style: 'Refined Based on Feedback',
+                content: userInput.length > 50 ? userInput : `${context.originalIdea}\n\n${userInput}`,
+                reasoning: 'Incorporated your specific feedback'
+              },
+              ...drafts.slice(0, 1)
+            ];
+            setDrafts(refinedDrafts);
+            addMessage(`Got it! I've refined the drafts based on your feedback. How do these look?\n\nWhen you're happy, click "Finalize Strategy" to lock in your plan.`);
+            setConversationState('refining');
+          }, 1200);
+        }
+      };
+
+      const handleAngleSelect = async (angle) => {
+        setSelectedAngle(angle.angle);
+        setContext(prev => ({ ...prev, selectedAngle: angle.angle }));
+        addMessage(`I'll go with "${angle.angle}"`, true);
+
+        await simulateTyping(() => {
+          const generatedDrafts = generateStrategyDrafts(context.originalIdea, context, angle.angle);
+          setDrafts(generatedDrafts);
+          addMessage(`Great choice! Here are draft options using the "${angle.angle}" approach:\n\nPick one to use, edit it, or tell me what to change.`);
+          setConversationState('drafts');
+        }, 1500);
+      };
+
+      const handleUseDraft = (content) => {
+        setContext(prev => ({ ...prev, finalDraft: content }));
+        const plan = {
+          coreMessage: analysis?.coreMessage || context.originalIdea,
+          audience: context.audience || 'Critters Quest community',
+          angle: selectedAngle || 'Direct',
+          drafts: drafts.filter(d => d.content === content || drafts.indexOf(d) === 0),
+          algorithmTips: analysis?.algorithmTips || ['Add a question for P(reply)', 'Use visuals for P(photo_expand)']
+        };
+        setFinalPlan(plan);
+        addMessage(`Strategy finalized!\n\nYour marketing plan is ready. You can now export it to the Post Optimizer for final scoring and optimization.`);
+        setConversationState('complete');
+      };
+
+      const handleEditDraft = (content) => {
+        setInput(content);
+      };
+
+      const handleFinalize = () => {
+        if (drafts.length > 0) {
+          handleUseDraft(drafts[0].content);
+        }
+      };
+
+      const handleReset = () => {
+        setMessages([
+          { id: 1, text: "Ready for a new strategy! Share your next idea or announcement.", isUser: false }
+        ]);
+        setConversationState('initial');
+        setContext({});
+        setAnalysis(null);
+        setSelectedAngle(null);
+        setDrafts([]);
+        setFinalPlan(null);
+      };
+
+      return (
+        <div className="rounded-xl flex flex-col h-[700px]" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+          {/* Header */}
+          <div className="p-4 flex justify-between items-center" style={{ borderBottom: '4px solid #FFB84A' }}>
+            <div>
+              <h2 className="text-lg font-semibold" style={{ color: '#FDBA4D' }}>Strategy Builder</h2>
+              <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.7 }}>Conversational marketing strategy development</p>
+            </div>
+            <button onClick={handleReset} className="text-xs hover:opacity-80" style={{ color: '#FFFFFF' }}>
+              Start New
+            </button>
+          </div>
+
+          {/* Chat Area */}
+          <div className="flex-1 overflow-y-auto p-4 space-y-2">
+            {messages.map(msg => (
+              <ChatMessage key={msg.id} message={msg.text} isUser={msg.isUser} />
+            ))}
+            {isTyping && <ChatMessage isTyping={true} />}
+
+            {/* Angle Selection */}
+            {conversationState === 'angles' && analysis?.suggestedAngles && (
+              <div className="grid grid-cols-2 gap-2 mt-4">
+                {analysis.suggestedAngles.map((angle, i) => (
+                  <AngleCard
+                    key={i}
+                    angle={angle.angle}
+                    desc={angle.desc}
+                    selected={selectedAngle === angle.angle}
+                    onClick={() => handleAngleSelect(angle)}
+                  />
+                ))}
+              </div>
+            )}
+
+            {/* Draft Options */}
+            {(conversationState === 'drafts' || conversationState === 'refining') && drafts.length > 0 && (
+              <div className="space-y-3 mt-4">
+                {drafts.map((draft, i) => (
+                  <DraftCard key={i} draft={draft} onUse={handleUseDraft} onEdit={handleEditDraft} />
+                ))}
+                <button
+                  onClick={handleFinalize}
+                  className="w-full py-2 rounded-lg text-sm font-medium transition-colors hover:opacity-90"
+                  style={{ backgroundColor: '#89D005', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
+                >
+                  Finalize Strategy
+                </button>
+              </div>
+            )}
+
+            {/* Final Plan */}
+            {conversationState === 'complete' && finalPlan && (
+              <div className="mt-4">
+                <StrategyPlanCard
+                  plan={finalPlan}
+                  onExport={() => onExportToOptimizer(finalPlan.drafts[0]?.content || context.originalIdea)}
+                />
+              </div>
+            )}
+
+            <div ref={chatEndRef} />
+          </div>
+
+          {/* Input Area */}
+          <div className="p-4" style={{ borderTop: '4px solid #2A2A2A' }}>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                onKeyPress={(e) => e.key === 'Enter' && handleSend()}
+                placeholder={
+                  conversationState === 'initial' ? "Share your idea or announcement..." :
+                  conversationState === 'angles' ? "Select an angle above or describe your own..." :
+                  "Type your feedback or refinements..."
+                }
+                className="flex-1 rounded-lg px-4 py-2 text-sm"
+                style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+              />
+              <button
+                onClick={handleSend}
+                disabled={!input.trim()}
+                className="px-4 py-2 rounded-lg text-sm font-medium transition-colors disabled:cursor-not-allowed hover:opacity-90"
+                style={{
+                  backgroundColor: input.trim() ? '#FFB84A' : '#2A2A2A',
+                  color: input.trim() ? '#0E0E0E' : '#FFFFFF',
+                  border: '3px solid #0E0E0E',
+                  opacity: input.trim() ? 1 : 0.5
+                }}
+              >
+                Send
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // ALGORITHM KNOWLEDGE BASE - Conversational Q&A
+    // ============================================
+
+    const ALGORITHM_KNOWLEDGE = {
+      // Deep knowledge entries with semantic matching
+      topics: {
+        repetitive_posting: {
+          keywords: ['repetitive', 'repeat', 'same', 'daily', 'pattern', 'posting pattern', 'same time', 'every day', 'schedule', 'consistent posting', 'over-posting', 'too much', 'too often'],
+          title: 'Repetitive Posting Patterns',
+          answer: `Repetitive posting patterns hurt your reach in several ways:
+
+**What the algorithm detects:**
+• Posting at the exact same time every day signals automation
+• Same format/structure repeatedly (e.g., "GM! [emoji]" daily)
+• Similar word patterns or templates used too frequently
+• Drip-feed language like "Item #1", "Day 2 of...", "Part 3"
+
+**Why it hurts:**
+• The AuthorDiversity filter deprioritizes accounts that flood feeds
+• Pattern recognition flags bot-like behavior
+• Followers experience content fatigue, reducing engagement velocity
+• P(mute) increases when followers see repetitive content
+
+**Better approach:**
+• Vary your posting times by 1-3 hours
+• Rotate between 4-5 different content formats
+• Space out similar announcements by 2+ days
+• Make each post feel like a standalone moment, not part of a series
+
+For item reveals, never say "Item #1" or "first of many" - treat each as special.`,
+          related: ['cadence', 'formats', 'spam']
+        },
+
+        scoring: {
+          keywords: ['score', 'scoring', 'formula', 'calculate', 'rank', 'ranking', 'how does', 'weight', 'weighted'],
+          title: 'The Scoring Formula',
+          answer: `X's algorithm calculates a final score for each post using weighted action predictions:
+
+**The Formula:**
+Final Score = Σ (weight_i × P(action_i))
+
+**Positive weights (these help):**
+• P(favorite) - likelihood of likes
+• P(reply) - likelihood of replies (+12 boost from questions)
+• P(repost) - likelihood of retweets
+• P(quote) - likelihood of quote tweets
+• P(follow_author) - likelihood user follows you (+8 from community words)
+• P(video_view) - video engagement (+20)
+• P(photo_expand) - image engagement (+15)
+• P(dwell) - time spent reading
+
+**Negative weights (these hurt):**
+• P(block) - likelihood of blocking
+• P(mute) - likelihood of muting
+• P(report) - likelihood of reporting
+
+The weighted sum determines where you appear in feeds. Focus on maximizing positive signals while avoiding content that triggers negative predictions.`,
+          related: ['phoenix', 'engagement', 'reach']
+        },
+
+        phoenix: {
+          keywords: ['phoenix', 'grok', 'model', 'transformer', 'prediction', 'ai', 'machine learning', 'how does x know', 'how does twitter know'],
+          title: 'Phoenix Scorer (The Brain)',
+          answer: `Phoenix is X's core ranking model - a Grok-based transformer that predicts user behavior:
+
+**What Phoenix does:**
+• Analyzes every post before it enters feeds
+• Predicts 15+ different user actions
+• Outputs probability scores: P(favorite), P(reply), P(repost), etc.
+• These predictions feed into the scoring formula
+
+**What Phoenix looks at:**
+• Your text content and structure
+• Media attachments (images, video)
+• Your account history and engagement patterns
+• The viewing user's preferences
+• Network signals (who follows whom)
+
+**Key insight:**
+Phoenix doesn't judge content directly - it predicts how users will react. Content that historically gets engagement signals quality. This is why engagement velocity in the first 15-30 minutes matters so much.`,
+          related: ['scoring', 'two_tower', 'engagement']
+        },
+
+        links: {
+          keywords: ['link', 'links', 'url', 'external', 'website', 'click out', 'off-platform', 'href'],
+          title: 'External Links & Reach',
+          answer: `External links are one of the biggest reach killers on X:
+
+**The penalty:**
+• Links in your main post = ~30% reach reduction
+• X wants users to stay on platform, not click away
+• The algorithm deprioritizes off-platform content
+
+**Smart link strategies:**
+1. **Reply method:** Post your content, then add the link as a reply
+2. **"Link in bio":** Direct to profile for important links
+3. **Thread method:** Put link in final tweet of a thread
+4. **Quote tweet:** Share a tweet that contains the link
+
+**For Critters Quest:**
+Put game links, Discord invites, and marketplace links in replies - never in the main announcement.`,
+          related: ['reach', 'spam', 'formats']
+        },
+
+        hashtags: {
+          keywords: ['hashtag', 'hashtags', '#', 'tags', 'how many hashtags', 'too many hashtags'],
+          title: 'Hashtag Strategy',
+          answer: `Hashtags have diminishing returns and can trigger spam filters:
+
+**The rules:**
+• 0-2 hashtags: Safe, can help discovery
+• 3 hashtags: Maximum recommended
+• 4+ hashtags: Triggers spam detection, hurts reach
+
+**Why 4+ hurts:**
+• Spam filter flags hashtag stuffing
+• Looks like engagement farming
+• Reduces perceived content quality
+• P(mute) increases
+
+**Best practices:**
+• Use 1-2 highly relevant hashtags max
+• Place at end of post, not beginning
+• Avoid trending hashtags unless genuinely relevant
+
+**For Critters Quest:**
+One branded hashtag max. Let the content speak - community will add their own tags.`,
+          related: ['spam', 'reach', 'formats']
+        },
+
+        spam: {
+          keywords: ['spam', 'spammy', 'flagged', 'filtered', 'blocked', 'muted', 'engagement bait', 'like if', 'rt for', 'guaranteed', '100x', 'buy now'],
+          title: 'Spam Signals & Muted Keywords',
+          answer: `The algorithm actively filters spam-like content:
+
+**Spam trigger words (avoid these):**
+• "guaranteed", "100%", "promise"
+• "100x", "moon", "to the moon"
+• "buy now", "limited time", "act fast"
+• "like if you agree", "RT for good luck"
+• "follow for follow", "f4f"
+• Excessive emojis (🚀🚀🚀)
+
+**Engagement bait penalties:**
+• "Like if..." = spam signal
+• "RT for..." = spam signal
+• "Comment [X] for..." = spam signal
+• These trigger P(mute) and P(report) predictions
+
+**Muted keyword filter:**
+• Many users mute crypto/NFT terms
+• Posts with muted words never reach those users
+• Common mutes: NFT, mint, airdrop, whitelist, alpha
+
+**Better alternatives:**
+• Instead of "Like if you agree" → "What do you think?"
+• Instead of "RT for luck" → Share genuinely interesting content
+• Instead of "Buy now" → "Now available" or just show the thing`,
+          related: ['reach', 'hashtags', 'repetitive_posting']
+        },
+
+        questions_engagement: {
+          keywords: ['question', 'questions', 'asking', 'ask', '?', 'reply', 'replies', 'conversation', 'engagement'],
+          title: 'Questions & Reply Optimization',
+          answer: `Questions are one of the most powerful engagement tools:
+
+**The boost:**
+• Questions add +12 to P(reply) prediction
+• They signal conversation intent to Phoenix
+• Replies create engagement velocity
+
+**Best question types:**
+1. **Open-ended:** "What do you think about...?"
+2. **Choice questions:** "Would you pick A or B?"
+3. **Speculation:** "What does this mean for...?"
+4. **Opinion polls:** "Hot take: [statement]. Agree?"
+
+**Question placement:**
+• End of post is strongest position
+• Creates a "hook" that demands response
+• Combines with other content seamlessly
+
+**Examples for Critters Quest:**
+• "Which critter would you main?" (choice)
+• "What build are you running?" (open)
+• "Did you see what's hidden in the corner?" (speculation)
+
+Avoid yes/no questions - they generate low-quality replies.`,
+          related: ['engagement', 'dwell', 'community']
+        },
+
+        community: {
+          keywords: ['community', 'we', 'our', 'together', 'fam', 'frens', 'tribe', 'follow', 'followers', 'belonging'],
+          title: 'Community Language & Follow Intent',
+          answer: `Using community language boosts P(follow_author):
+
+**Power words (+8 follow boost):**
+• "we" and "our" (inclusive)
+• "together" (shared journey)
+• "community" (tribal)
+• "fam", "frens" (intimate)
+• "builders" (identity)
+
+**Why it works:**
+• Signals tribal belonging
+• Creates in-group identity
+• Makes followers feel part of something
+• Increases follow intent prediction
+
+**How to use it:**
+• "We're building something special"
+• "Our community figured this out"
+• "Together, we shipped..."
+• "For everyone who's been here since day one"
+
+**For Critters Quest:**
+Build identity around "Critters" as a community name. "The Critters are onto something" > "Our users discovered..."`,
+          related: ['questions_engagement', 'engagement', 'follow']
+        },
+
+        media: {
+          keywords: ['image', 'images', 'video', 'media', 'photo', 'visual', 'picture', 'gif', 'attachment', 'video vs image'],
+          title: 'Media & Visual Content',
+          answer: `Visual content dramatically outperforms text-only posts:
+
+**The boosts:**
+• Video: +20 P(video_view)
+• Images: +15 P(photo_expand)
+• GIFs: Similar to images
+
+**Why media wins:**
+• Stops the scroll
+• Increases dwell time
+• Higher engagement predictions
+• More shareable
+
+**Video best practices:**
+• First 3 seconds must hook
+• Captions are essential (most watch muted)
+• Native upload > YouTube links
+• Optimal length: 30-90 seconds
+
+**Image best practices:**
+• High contrast, readable on mobile
+• Brand-consistent colors
+• Single clear focal point
+• Tease content, don't reveal everything
+
+**For Critters Quest:**
+Every announcement should have visual. Item reveals need glamor shots.`,
+          related: ['formats', 'dwell', 'engagement']
+        },
+
+        timing: {
+          keywords: ['time', 'timing', 'when', 'schedule', 'best time', 'post time', 'velocity', 'first 15', 'first 30'],
+          title: 'Timing & Velocity',
+          answer: `When you post matters, but early engagement matters more:
+
+**The velocity principle:**
+• First 15-30 minutes are critical
+• Early engagement signals content quality
+• Algorithm uses velocity to predict virality
+• Reply to every early comment
+
+**Best practices:**
+• Post when YOUR audience is active (check analytics)
+• Be present for 30 min after posting
+• Engage with replies immediately
+• Don't post and ghost
+
+**For Critters Quest (Item Reveal Campaign):**
+• Primary post: 5pm EST (syncs with redemption events)
+• Follow-up engagement: 30-60 min after
+• Community engagement posts: Sat/Sun
+
+**The truth:**
+A post at a "bad" time with great velocity beats a post at "perfect" time with no engagement.`,
+          related: ['engagement', 'repetitive_posting', 'cadence']
+        },
+
+        dwell: {
+          keywords: ['dwell', 'time spent', 'reading', 'mystery', 'curiosity', 'hook', 'scroll stop'],
+          title: 'Dwell Time & Curiosity',
+          answer: `P(dwell) predicts how long users spend on your content - one of the strongest ranking signals:
+
+**What increases dwell:**
+• Mystery language ("Something's coming...")
+• Curiosity hooks ("We weren't supposed to show this yet")
+• "Wait for it" content
+• Threads (users click through)
+• Dense, valuable information
+• Compelling visuals worth examining
+
+**Why dwell matters:**
+• High dwell = high quality signal
+• Correlates with meaningful engagement
+• Phoenix heavily weights this prediction
+
+**Mystery techniques:**
+• Partial reveals ("First look at...")
+• Unanswered questions in the content
+• Hidden details in images
+• Callbacks to lore or previous posts
+
+**For Critters Quest:**
+• Item reveals: "We've been keeping this one secret..."
+• Lore drops: Tease, don't dump
+• Dev updates: "Here's what we're NOT supposed to show you yet"`,
+          related: ['engagement', 'media', 'threads']
+        },
+
+        threads: {
+          keywords: ['thread', 'threads', 'long form', 'multiple tweets', '1/', 'thread format'],
+          title: 'Thread Strategy',
+          answer: `Threads boost P(click) by +10 and maximize dwell time:
+
+**When to use threads:**
+• Long-form announcements
+• Lore drops or storytelling
+• Educational content
+• Major feature breakdowns
+• Behind-the-scenes deep dives
+
+**Thread best practices:**
+• First tweet MUST hook (it's the only one most see)
+• Tease the value: "A thread on [topic]:"
+• Each tweet should stand alone AND flow
+• Use images/video in first tweet
+• End with a question or CTA
+• Optimal length: 3-7 tweets
+
+**First tweet formula:**
+• Hook + visual + promise of value
+• "We spent 6 months on this. Here's what we learned:"
+• "The story behind [thing]. A thread 🧵"
+
+**Avoid:**
+• Starting with "1/" (boring opener)
+• Threads that could be a single tweet
+• No visual in first tweet`,
+          related: ['dwell', 'formats', 'media']
+        },
+
+        formats: {
+          keywords: ['format', 'formats', 'type', 'structure', 'template', 'what kind', 'post type'],
+          title: 'Content Formats & Rotation',
+          answer: `Varying your formats keeps the algorithm (and followers) interested:
+
+**Core formats to rotate:**
+1. **Glamor shots** - Beautiful standalone images
+2. **Curiosity teasers** - Mystery + partial reveal
+3. **Lore drops** - Worldbuilding, story
+4. **Behind-the-scenes** - Dev process, WIP
+5. **Community callouts** - Spotlights, UGC
+6. **Direct announcements** - News, updates
+7. **Threads** - Long-form deep dives
+8. **Engagement posts** - Questions, polls
+
+**Why rotation matters:**
+• Same format repeatedly triggers pattern detection
+• Different formats reach different audience segments
+• Keeps content fresh in the algorithm's eyes
+
+**For Critters Quest Item Reveals:**
+• Mon/Tue: Anchor content (Glamor or Curiosity)
+• Thu: Deep cut (Lore or BTS)
+• Sat: Community-focused
+
+**Rule of thumb:**
+Never use the exact same format twice in a row.`,
+          related: ['repetitive_posting', 'cadence', 'media']
+        },
+
+        cadence: {
+          keywords: ['cadence', 'frequency', 'how often', 'how many', 'per day', 'per week', 'posting schedule'],
+          title: 'Posting Cadence',
+          answer: `Quality over quantity - the algorithm rewards thoughtful cadence:
+
+**Recommended cadence:**
+• 2-3 posts per week for campaigns
+• Minimum 2 days between similar content
+• Never more than 1 major announcement per day
+
+**Why restraint works:**
+• Each post gets full audience attention
+• Prevents content fatigue
+• Allows time for engagement to develop
+• Avoids AuthorDiversity filter penalties
+
+**For Critters Quest Item Reveals:**
+• Week 1-3: 2-3 posts/week, building momentum
+• Week 4+: Can increase slightly if engagement supports it
+• Never do daily reveals (drip-feed fatigue)
+
+**Weekly pattern:**
+• Mon or Tue: Anchor post (big announcement)
+• Thu: Deep cut (secondary content)
+• Sat: Community engagement`,
+          related: ['repetitive_posting', 'timing', 'formats']
+        },
+
+        reach: {
+          keywords: ['reach', 'impressions', 'views', 'visibility', 'distribution', 'why no reach', 'reach dropped'],
+          title: 'Maximizing Reach',
+          answer: `Reach is determined by scoring, engagement, and avoiding penalties:
+
+**Reach boosters:**
+• Visual content (+15-20)
+• Questions (+12)
+• Community language (+8)
+• Good engagement velocity
+• Optimal length (100-200 chars)
+• Thread format (+10 P(click))
+
+**Reach killers:**
+• External links (-30%)
+• 4+ hashtags
+• Spam language
+• Muted keywords
+• Repetitive patterns
+• Low early engagement
+
+**The reach flywheel:**
+1. Post high-quality content
+2. Engage immediately with replies
+3. Good velocity signals quality
+4. Algorithm shows to more users
+5. More engagement = more reach
+6. Repeat
+
+**For Critters Quest:**
+Focus on creating "stop the scroll" moments. Every post should make someone pause. Reach follows engagement.`,
+          related: ['scoring', 'links', 'spam', 'engagement']
+        },
+
+        engagement: {
+          keywords: ['engagement', 'engage', 'likes', 'replies', 'retweets', 'interaction', 'boost engagement'],
+          title: 'Driving Engagement',
+          answer: `Engagement is the lifeblood of reach - here's how to maximize it:
+
+**Engagement hierarchy (by algorithm weight):**
+1. Replies (highest value)
+2. Quote tweets
+3. Retweets
+4. Likes
+5. Bookmarks
+
+**Getting more replies:**
+• End with questions
+• Ask for opinions
+• Create debate-worthy statements
+• Respond to every reply (creates reply chains)
+
+**Getting more retweets:**
+• Share-worthy visuals
+• Useful information
+• Strong opinions people want to endorse
+• Emotional resonance
+
+**Engagement velocity:**
+• First 15-30 min are critical
+• Be present and reply fast
+• Early engagement compounds
+• Never post and ghost
+
+**For Critters Quest:**
+Reply to every comment in first hour. Create reply-worthy content by asking questions.
+
+**Quality > quantity:**
+10 genuine replies beat 100 low-effort likes for algorithm ranking.`,
+          related: ['questions_engagement', 'timing', 'reach']
+        },
+
+        length: {
+          keywords: ['length', 'characters', 'how long', 'short', 'long post', 'word count', '280'],
+          title: 'Optimal Post Length',
+          answer: `Post length affects format score and engagement:
+
+**The sweet spot: 100-200 characters**
+• +10 format score in this range
+• Long enough to provide value
+• Short enough for full engagement
+• Easy to read and share
+
+**Too short (<50 chars):**
+• Lacks substance
+• Low dwell time
+• Feels low-effort
+• Exception: powerful one-liners
+
+**Too long (>240 chars):**
+• Completion rates drop
+• Gets truncated in some views
+• Save long-form for threads
+
+**For Critters Quest:**
+Item reveals should be punchy - name, tease, hook. Save details for replies or threads.`,
+          related: ['formats', 'engagement', 'dwell']
+        },
+
+        filters: {
+          keywords: ['filter', 'filtered', 'invisible', 'shadow', 'shadowban', 'not showing', 'no impressions'],
+          title: 'Pre-Score Filters',
+          answer: `Before scoring, posts go through filters that can make content invisible:
+
+**Key filters:**
+1. **AgeFilter** - Very old posts deprioritized
+2. **MutedKeywordFilter** - Posts with muted words hidden
+3. **VFFilter** - Violence/spam/adult content filtered
+4. **RepostDeduplication** - Duplicate content deprioritized
+5. **AuthorDiversity** - Limits how much one account shows
+
+**If you're being filtered:**
+• Check for muted keywords (NFT, mint, crypto terms)
+• Remove spam-like language
+• Reduce posting frequency
+• Vary your content more
+
+**Common muted keywords:**
+• NFT, mint, whitelist, airdrop
+• Crypto, token, $TICKER
+• Alpha, degen
+
+**For Critters Quest:**
+Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-friendly.`,
+          related: ['spam', 'reach']
+        }
+      },
+
+      // Conversational response generator
+      getResponse: (query) => {
+        const queryLower = query.toLowerCase().trim();
+        if (!queryLower) return null;
+
+        const scored = Object.entries(ALGORITHM_KNOWLEDGE.topics).map(([key, topic]) => {
+          let score = 0;
+          const queryWords = queryLower.split(/\s+/);
+
+          topic.keywords.forEach(kw => {
+            if (queryLower.includes(kw)) score += 15;
+            if (kw.includes(queryLower)) score += 10;
+          });
+
+          queryWords.forEach(word => {
+            if (word.length < 3) return;
+            topic.keywords.forEach(kw => {
+              if (kw.includes(word)) score += 5;
+              if (word.includes(kw)) score += 3;
+            });
+            if (topic.title.toLowerCase().includes(word)) score += 8;
+            if (topic.answer.toLowerCase().includes(word)) score += 1;
+          });
+
+          return { key, topic, score };
+        });
+
+        scored.sort((a, b) => b.score - a.score);
+
+        if (scored[0].score < 5) {
+          return {
+            title: "I'm not sure about that one",
+            answer: `I don't have specific information about "${query}". Try asking about:\n\n• Scoring & the formula\n• Reach killers (links, hashtags, spam)\n• Engagement tactics (questions, community language)\n• Content formats & cadence\n• Timing & velocity\n• Repetitive posting patterns`,
+            related: []
+          };
+        }
+
+        const best = scored[0];
+        const relatedTopics = best.topic.related
+          ?.map(r => ALGORITHM_KNOWLEDGE.topics[r]?.title)
+          .filter(Boolean)
+          .slice(0, 3) || [];
+
+        return {
+          title: best.topic.title,
+          answer: best.topic.answer,
+          related: relatedTopics
+        };
+      }
+    };
+
+    // Bento data modules for key algorithm insights
+    const BENTO_MODULES = [
+      {
+        id: 'formula',
+        title: 'The Formula',
+        size: 'large',
+        content: 'Score = Σ (weight × P(action))',
+        detail: 'Positive actions add, negative actions subtract',
+        color: '#FFB84A'
+      },
+      {
+        id: 'question-boost',
+        title: 'Question Power',
+        size: 'small',
+        content: '+12',
+        detail: 'P(reply) boost from questions',
+        color: '#89D005'
+      },
+      {
+        id: 'video-boost',
+        title: 'Video Impact',
+        size: 'small',
+        content: '+20',
+        detail: 'P(video_view) advantage',
+        color: '#89D005'
+      },
+      {
+        id: 'image-boost',
+        title: 'Image Impact',
+        size: 'small',
+        content: '+15',
+        detail: 'P(photo_expand) boost',
+        color: '#89D005'
+      },
+      {
+        id: 'community-boost',
+        title: 'Community Words',
+        size: 'small',
+        content: '+8',
+        detail: '"We/Our" P(follow) boost',
+        color: '#89D005'
+      },
+      {
+        id: 'link-penalty',
+        title: 'Link Penalty',
+        size: 'medium',
+        content: '-30%',
+        detail: 'External links kill reach. Put in reply.',
+        color: '#FF6B6B'
+      },
+      {
+        id: 'spam-penalty',
+        title: 'Spam Words',
+        size: 'medium',
+        content: '-25',
+        detail: '"guaranteed", "100x", "buy now"',
+        color: '#FF6B6B'
+      },
+      {
+        id: 'hashtag-limit',
+        title: 'Hashtag Limit',
+        size: 'small',
+        content: '3 max',
+        detail: '4+ triggers spam filter',
+        color: '#FF6B6B'
+      },
+      {
+        id: 'sweet-spot',
+        title: 'Length Sweet Spot',
+        size: 'medium',
+        content: '100-200',
+        detail: 'Characters for optimal engagement',
+        color: '#24E0FF'
+      },
+      {
+        id: 'velocity',
+        title: 'Velocity Window',
+        size: 'medium',
+        content: '15-30 min',
+        detail: 'Engage hard after posting',
+        color: '#24E0FF'
+      },
+      {
+        id: 'dwell',
+        title: 'Dwell Time',
+        size: 'small',
+        content: 'P(dwell)',
+        detail: 'Mystery = longer reads',
+        color: '#FDBA4D'
+      },
+      {
+        id: 'thread-boost',
+        title: 'Thread Boost',
+        size: 'small',
+        content: '+10',
+        detail: 'P(click) for threads',
+        color: '#89D005'
+      }
+    ];
+
+    // ============================================
+    // LEARN COMPONENT
+    // ============================================
+
+    const LearnView = () => {
+      const [question, setQuestion] = useState('');
+      const [response, setResponse] = useState(null);
+      const [selectedModule, setSelectedModule] = useState(null);
+
+      // Format markdown-like text to JSX
+      const formatAnswer = (text) => {
+        return text.split('\n').map((line, i) => {
+          if (line.startsWith('**') && line.endsWith('**')) {
+            return <p key={i} className="font-bold mt-3 mb-1" style={{ color: '#FFB84A' }}>{line.replace(/\*\*/g, '')}</p>;
+          }
+          if (line.includes('**')) {
+            const parts = line.split(/\*\*(.+?)\*\*/g);
+            return (
+              <p key={i} className="text-sm leading-relaxed">
+                {parts.map((part, j) => j % 2 === 1 ? <strong key={j} style={{ color: '#FFB84A' }}>{part}</strong> : part)}
+              </p>
+            );
+          }
+          if (line.startsWith('•')) return <p key={i} className="text-sm ml-2 leading-relaxed">{line}</p>;
+          if (/^\d+\./.test(line)) return <p key={i} className="text-sm ml-2 leading-relaxed font-medium">{line}</p>;
+          if (!line.trim()) return <div key={i} className="h-2" />;
+          return <p key={i} className="text-sm leading-relaxed">{line}</p>;
+        });
+      };
+
+      const handleAsk = () => {
+        if (!question.trim()) return;
+        const result = ALGORITHM_KNOWLEDGE.getResponse(question);
+        setResponse(result);
+      };
+
+      const handleQuickQuestion = (q) => {
+        setQuestion(q);
+        const result = ALGORITHM_KNOWLEDGE.getResponse(q);
+        setResponse(result);
+      };
+
+      const handleRelatedClick = (topic) => {
+        setQuestion(topic);
+        const result = ALGORITHM_KNOWLEDGE.getResponse(topic);
+        setResponse(result);
+      };
+
+      return (
+        <div className="space-y-6">
+          {/* Conversational Q&A Section - First */}
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            {/* Ask a Question - Larger area */}
+            <div className="lg:col-span-2 rounded-xl p-5" style={{ backgroundColor: '#0E0E0E', border: '3px solid #24E0FF', borderRadius: '16px' }}>
+              <h3 className="text-lg font-semibold mb-4" style={{ color: '#24E0FF', borderBottom: '4px solid #24E0FF', paddingBottom: '10px' }}>Ask Me Anything About the X Algorithm</h3>
+
+              <div className="flex gap-2 mb-4">
+                <input
+                  type="text"
+                  value={question}
+                  onChange={(e) => setQuestion(e.target.value)}
+                  onKeyPress={(e) => e.key === 'Enter' && handleAsk()}
+                  placeholder="e.g., 'explain repetitive posting patterns' or 'how do links affect reach?'"
+                  className="flex-1 rounded-lg px-4 py-3 text-sm"
+                  style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                />
+                <button
+                  onClick={handleAsk}
+                  className="px-6 py-3 rounded-lg text-sm font-semibold hover:opacity-90"
+                  style={{ backgroundColor: '#24E0FF', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
+                >
+                  Ask
+                </button>
+              </div>
+
+              {/* Quick Questions */}
+              <div className="mb-4">
+                <p className="text-xs mb-2" style={{ color: '#FFFFFF', opacity: 0.5 }}>Try asking about:</p>
+                <div className="flex flex-wrap gap-2">
+                  {[
+                    'repetitive posting patterns',
+                    'how to maximize reach',
+                    'link penalties',
+                    'engagement velocity',
+                    'spam triggers',
+                    'best post length'
+                  ].map((q, i) => (
+                    <button
+                      key={i}
+                      onClick={() => handleQuickQuestion(q)}
+                      className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
+                      style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '2px solid #3A3A3A' }}
+                    >
+                      {q}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Response Area */}
+              {response ? (
+                <div className="rounded-lg p-4" style={{ backgroundColor: '#1A1A1A', border: '2px solid #24E0FF' }}>
+                  <div className="flex items-center gap-2 mb-3 pb-2" style={{ borderBottom: '2px solid #2A2A2A' }}>
+                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#24E0FF' }}></div>
+                    <h4 className="font-semibold" style={{ color: '#24E0FF' }}>{response.title}</h4>
+                  </div>
+                  <div className="text-white max-h-80 overflow-y-auto pr-2">
+                    {formatAnswer(response.answer)}
+                  </div>
+                  {response.related && response.related.length > 0 && (
+                    <div className="mt-4 pt-3" style={{ borderTop: '2px solid #2A2A2A' }}>
+                      <p className="text-xs mb-2" style={{ color: '#FFFFFF', opacity: 0.5 }}>Related topics:</p>
+                      <div className="flex flex-wrap gap-2">
+                        {response.related.map((topic, i) => (
+                          <button
+                            key={i}
+                            onClick={() => handleRelatedClick(topic)}
+                            className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
+                            style={{ backgroundColor: '#24E0FF', color: '#0E0E0E', fontWeight: 500 }}
+                          >
+                            {topic}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-lg p-6 text-center" style={{ backgroundColor: '#1A1A1A', border: '2px dashed #2A2A2A' }}>
+                  <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.5 }}>Ask a question to learn about the X algorithm</p>
+                  <p className="text-xs mt-1" style={{ color: '#FFFFFF', opacity: 0.3 }}>I can explain scoring, reach, engagement tactics, content strategy, and more</p>
+                </div>
+              )}
+            </div>
+
+            {/* Key Principles - Sidebar */}
+            <div className="space-y-4">
+              <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #89D005', borderRadius: '16px' }}>
+                <h3 className="text-sm font-semibold mb-3" style={{ color: '#89D005' }}>Do This ✓</h3>
+                <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                  <li>• End posts with a question</li>
+                  <li>• Use "we/our" language</li>
+                  <li>• Add images or video</li>
+                  <li>• Keep to 100-200 chars</li>
+                  <li>• Engage within 15 min</li>
+                  <li>• Build curiosity</li>
+                  <li>• Links in replies only</li>
+                </ul>
+              </div>
+
+              <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FF6B6B', borderRadius: '16px' }}>
+                <h3 className="text-sm font-semibold mb-3" style={{ color: '#FF6B6B' }}>Avoid This ✗</h3>
+                <ul className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                  <li>• External links in post</li>
+                  <li>• 4+ hashtags</li>
+                  <li>• "guaranteed", "100x"</li>
+                  <li>• "like if", "RT for"</li>
+                  <li>• Daily same format</li>
+                  <li>• "Item #1" language</li>
+                  <li>• Post and ghost</li>
+                </ul>
+              </div>
+
+              <div className="rounded-xl p-4" style={{ backgroundColor: '#24E0FF', border: '3px solid #0E0E0E', borderRadius: '16px' }}>
+                <p className="text-xs font-semibold" style={{ color: '#0E0E0E' }}>
+                  "The algorithm rewards genuine engagement. Mystery, questions, and community language signal quality."
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {/* Bento Grid - Second */}
+          <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+            <h2 className="text-lg font-semibold mb-4" style={{ color: '#FFB84A', borderBottom: '4px solid #FFB84A', paddingBottom: '10px' }}>Algorithm Essentials</h2>
+            <div className="grid grid-cols-4 gap-3">
+              {BENTO_MODULES.map((module) => (
+                <div
+                  key={module.id}
+                  onClick={() => setSelectedModule(selectedModule === module.id ? null : module.id)}
+                  className={`rounded-xl p-3 cursor-pointer transition-all hover:scale-105 ${
+                    module.size === 'large' ? 'col-span-2 row-span-2' :
+                    module.size === 'medium' ? 'col-span-2' : 'col-span-1'
+                  }`}
+                  style={{
+                    backgroundColor: selectedModule === module.id ? module.color : '#2A2A2A',
+                    border: `3px solid ${module.color}`,
+                    minHeight: module.size === 'large' ? '140px' : module.size === 'medium' ? '80px' : '70px'
+                  }}
+                >
+                  <p className="text-xs font-medium" style={{ color: selectedModule === module.id ? '#0E0E0E' : module.color }}>{module.title}</p>
+                  <p className={`font-bold ${module.size === 'large' ? 'text-2xl mt-2' : module.size === 'medium' ? 'text-xl' : 'text-lg'}`}
+                     style={{ color: selectedModule === module.id ? '#0E0E0E' : '#FFFFFF' }}>{module.content}</p>
+                  <p className="text-xs mt-1" style={{ color: selectedModule === module.id ? '#0E0E0E' : '#FFFFFF', opacity: 0.7 }}>{module.detail}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      );
+    };
+
+    // ============================================
+    // CRITTERS QUEST PRESETS
+    // ============================================
+
+    const CRITTERS_QUEST_PRESETS = {
+      gameUpdate: { name: 'Game Update', template: 'Just shipped: {feature}\n\n{details}\n\nPlay now: {link}' },
+      loreDrop: { name: 'Lore Drop', template: 'New lore unlocked...\n\n{teaser}\n\nThe story deepens.' },
+      communityGM: { name: 'Community GM', template: 'gm Critters\n\n{message}\n\nWhat are you working on today?' },
+      announcement: { name: 'Big Announcement', template: '{headline}\n\n{details}\n\nThis changes everything for {benefit}' },
+      behindScenes: { name: 'Behind the Scenes', template: 'Building in public\n\n{whatWereWorkingOn}\n\nThoughts on {question}?' }
+    };
+
+    // ============================================
+    // MAIN APPLICATION
+    // ============================================
+
+    const App = () => {
+      const [activeView, setActiveView] = useState('strategy'); // 'strategy', 'optimizer', or 'learn'
+      const [draft, setDraft] = useState('');
+      const [options, setOptions] = useState({
+        goal: 'awareness', mediaType: 'none', tone: 'announcement',
+        targetAudience: 'mixed', hasLink: false
+      });
+      const [analysis, setAnalysis] = useState(null);
+      const [activeTab, setActiveTab] = useState('scores');
+      const [copied, setCopied] = useState(false);
+      const [selectedPreset, setSelectedPreset] = useState(null);
+
+      const handleAnalyze = useCallback(() => {
+        if (!draft.trim()) return;
+        const result = analyzePost(draft, { ...options, draft });
+        setAnalysis(result);
+      }, [draft, options]);
+
+      const handleCopy = useCallback((text) => {
+        navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2000);
+      }, []);
+
+      const handleExportFromStrategy = (content) => {
+        setDraft(content);
+        setActiveView('optimizer');
+        setTimeout(() => {
+          const result = analyzePost(content, { ...options });
+          setAnalysis(result);
+        }, 100);
+      };
+
+      const variants = useMemo(() => {
+        if (!analysis) return [];
+        return generateOptimizedVariants(draft, analysis, { ...options, draft });
+      }, [analysis, draft, options]);
+
+      const charCount = draft.length;
+      const charCountColor = charCount > 280 ? 'text-red-400' : charCount > 240 ? 'text-yellow-400' : 'text-gray-400';
+
+      return (
+        <div className="min-h-screen" style={{ backgroundColor: '#0E0E0E' }}>
+          {/* Header */}
+          <header className="sticky top-0 z-10" style={{ backgroundColor: '#FFB84A', borderBottom: '4px solid #0E0E0E' }}>
+            <div className="max-w-7xl mx-auto px-4 py-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h1 className="text-2xl font-bold" style={{ color: '#0E0E0E', fontWeight: 800 }}>
+                    X Post Optimizer
+                  </h1>
+                  <p className="text-sm" style={{ color: '#0E0E0E', opacity: 0.7 }}>Critters Quest Edition - Powered by X Algorithm Research</p>
+                </div>
+                <div className="flex items-center gap-4">
+                  {/* View Toggle */}
+                  <div className="flex rounded-lg p-1" style={{ backgroundColor: '#0E0E0E', border: '3px solid #0E0E0E' }}>
+                    <button
+                      onClick={() => setActiveView('learn')}
+                      className="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                      style={{
+                        backgroundColor: activeView === 'learn' ? '#24E0FF' : 'transparent',
+                        color: activeView === 'learn' ? '#0E0E0E' : '#FFFFFF'
+                      }}
+                    >
+                      Learn
+                    </button>
+                    <button
+                      onClick={() => setActiveView('strategy')}
+                      className="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                      style={{
+                        backgroundColor: activeView === 'strategy' ? '#89D005' : 'transparent',
+                        color: activeView === 'strategy' ? '#0E0E0E' : '#FFFFFF'
+                      }}
+                    >
+                      Strategy Builder
+                    </button>
+                    <button
+                      onClick={() => setActiveView('optimizer')}
+                      className="px-4 py-2 rounded-md text-sm font-medium transition-colors"
+                      style={{
+                        backgroundColor: activeView === 'optimizer' ? '#89D005' : 'transparent',
+                        color: activeView === 'optimizer' ? '#0E0E0E' : '#FFFFFF'
+                      }}
+                    >
+                      Post Optimizer
+                    </button>
+                  </div>
+                  <a
+                    href="https://github.com/xai-org/x-algorithm"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs transition-colors hover:opacity-80"
+                    style={{ color: '#0E0E0E' }}
+                  >
+                    Based on xai-org/x-algorithm
+                  </a>
+                </div>
+              </div>
+            </div>
+          </header>
+
+          <main className="max-w-7xl mx-auto px-4 py-6 bg-[#75FFE9]">
+            {activeView === 'learn' ? (
+              /* Learn View */
+              <LearnView />
+            ) : activeView === 'strategy' ? (
+              /* Strategy Builder View */
+              <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                <div className="lg:col-span-2">
+                  <StrategyBuilder onExportToOptimizer={handleExportFromStrategy} />
+                </div>
+                <div className="space-y-4">
+                  {/* Quick Tips */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>How It Works</h3>
+                    <ol className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                      <li>1. Share your raw idea or announcement</li>
+                      <li>2. I'll analyze and suggest angles</li>
+                      <li>3. Pick an angle or describe your own</li>
+                      <li>4. Review and refine draft options</li>
+                      <li>5. Export to Post Optimizer for final scoring</li>
+                    </ol>
+                  </div>
+
+                  {/* Algorithm Quick Reference */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Algorithm Quick Tips</h3>
+                    <div className="text-xs space-y-2" style={{ color: '#FFFFFF' }}>
+                      <p>- <span style={{ color: '#89D005' }}>Questions</span> +12 P(reply)</p>
+                      <p>- <span style={{ color: '#89D005' }}>"We/Our"</span> +8 P(follow_author)</p>
+                      <p>- <span style={{ color: '#89D005' }}>Images</span> +15 P(photo_expand)</p>
+                      <p>- <span style={{ color: '#89D005' }}>Video</span> +20 P(video_view)</p>
+                      <p>- <span style={{ color: '#FF6B6B' }}>Spam words</span> -25 quality</p>
+                      <p>- <span style={{ color: '#FF6B6B' }}>4+ hashtags</span> spam signal</p>
+                    </div>
+                  </div>
+
+                  {/* Campaign Rules */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #FFB84A', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FFB84A', borderBottom: '4px solid #FFB84A', paddingBottom: '10px' }}>Campaign Rules</h3>
+                    <div className="text-xs space-y-3" style={{ color: '#FFFFFF' }}>
+                      <div>
+                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Cadence</p>
+                        <p style={{ opacity: 0.8 }}>2-3 posts/week max. No daily reveals.</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Weekly Pattern</p>
+                        <p style={{ opacity: 0.8 }}>Mon/Tue: Anchor | Thu: Deep Cut | Sat: Community</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Content Tiers</p>
+                        <p style={{ opacity: 0.8 }}>Tier 1 (Sets/Legendary): Standalone OK</p>
+                        <p style={{ opacity: 0.8 }}>Tier 2 (Weapons/Variants): Needs anchor context</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold" style={{ color: '#FDBA4D' }}>Timing</p>
+                        <p style={{ opacity: 0.8 }}>Post at 5pm EST. Follow up 30-60 min later.</p>
+                      </div>
+                      <div>
+                        <p className="font-semibold" style={{ color: '#FF6B6B' }}>Avoid</p>
+                        <p style={{ opacity: 0.8 }}>"Item #1", "daily reveal", "first of many"</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Content Ideas */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Content Ideas</h3>
+                    <div className="space-y-2">
+                      {[
+                        'New feature announcement',
+                        'Community milestone celebration',
+                        'Behind-the-scenes dev update',
+                        'Lore teaser or story drop',
+                        'Player spotlight or UGC share',
+                        'Roadmap progress update'
+                      ].map((idea, i) => (
+                        <button
+                          key={i}
+                          className="w-full text-left text-xs px-3 py-2 rounded-lg transition-colors hover:opacity-80"
+                          style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '2px solid #0E0E0E' }}
+                        >
+                          {idea}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* Post Optimizer View */
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* Left Column - Input */}
+                <div className="space-y-6">
+                  {/* Preset Selector */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-3" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Quick Presets</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {Object.entries(CRITTERS_QUEST_PRESETS).map(([key, preset]) => (
+                        <button
+                          key={key}
+                          onClick={() => { setSelectedPreset(key); setDraft(preset.template); }}
+                          className="px-3 py-1.5 rounded-lg text-sm transition-colors hover:opacity-90"
+                          style={{
+                            backgroundColor: selectedPreset === key ? '#89D005' : '#2A2A2A',
+                            color: selectedPreset === key ? '#0E0E0E' : '#FFFFFF',
+                            border: '3px solid #0E0E0E'
+                          }}
+                        >
+                          {preset.name}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Post Input */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                    <div className="flex justify-between items-center mb-2">
+                      <label className="text-sm font-semibold" style={{ color: '#FDBA4D' }}>Your Post Draft</label>
+                      <span className="text-sm" style={{ color: charCount > 280 ? '#FF6B6B' : charCount > 240 ? '#FFB84A' : '#FFFFFF' }}>{charCount}/280</span>
+                    </div>
+                    <textarea
+                      value={draft}
+                      onChange={(e) => setDraft(e.target.value)}
+                      placeholder="Enter your post draft here..."
+                      className="w-full h-40 rounded-lg p-3 resize-none"
+                      style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                    />
+                  </div>
+
+                  {/* Options */}
+                  <div className="rounded-xl p-4" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                    <h3 className="text-sm font-semibold mb-4" style={{ color: '#FDBA4D', borderBottom: '4px solid #0E0E0E', paddingBottom: '10px' }}>Post Options</h3>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Goal</label>
+                        <select value={options.goal} onChange={(e) => setOptions({...options, goal: e.target.value})}
+                          className="w-full rounded-lg px-3 py-2 text-sm"
+                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
+                          <option value="awareness">Awareness</option>
+                          <option value="traffic">Traffic/Clicks</option>
+                          <option value="follows">Follows</option>
+                          <option value="engagement">Engagement</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Media Type</label>
+                        <select value={options.mediaType} onChange={(e) => setOptions({...options, mediaType: e.target.value})}
+                          className="w-full rounded-lg px-3 py-2 text-sm"
+                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
+                          <option value="none">Text Only</option>
+                          <option value="image">Image</option>
+                          <option value="video">Video</option>
+                          <option value="thread">Thread</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Tone</label>
+                        <select value={options.tone} onChange={(e) => setOptions({...options, tone: e.target.value})}
+                          className="w-full rounded-lg px-3 py-2 text-sm"
+                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
+                          <option value="announcement">Announcement</option>
+                          <option value="GM">GM Post</option>
+                          <option value="lore">Lore/Story</option>
+                          <option value="educational">Educational</option>
+                          <option value="meme">Meme/Fun</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs mb-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Target Audience</label>
+                        <select value={options.targetAudience} onChange={(e) => setOptions({...options, targetAudience: e.target.value})}
+                          className="w-full rounded-lg px-3 py-2 text-sm"
+                          style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}>
+                          <option value="followers">Existing Followers</option>
+                          <option value="discovery">Discovery/New</option>
+                          <option value="mixed">Mixed</option>
+                        </select>
+                      </div>
+                    </div>
+                    <div className="mt-4">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" checked={options.hasLink}
+                          onChange={(e) => setOptions({...options, hasLink: e.target.checked})}
+                          className="w-4 h-4 rounded" style={{ accentColor: '#89D005' }} />
+                        <span className="text-sm" style={{ color: '#FFFFFF' }}>Contains external link</span>
+                      </label>
+                    </div>
+                  </div>
+
+                  {/* Analyze Button */}
+                  <button onClick={handleAnalyze} disabled={!draft.trim()}
+                    className="w-full py-3 rounded-xl font-semibold transition-all disabled:cursor-not-allowed hover:opacity-90"
+                    style={{
+                      backgroundColor: draft.trim() ? '#FFB84A' : '#2A2A2A',
+                      color: draft.trim() ? '#0E0E0E' : '#FFFFFF',
+                      border: '3px solid #0E0E0E',
+                      opacity: draft.trim() ? 1 : 0.5
+                    }}>
+                    Analyze & Optimize
+                  </button>
+                </div>
+
+                {/* Right Column - Analysis */}
+                <div className="space-y-6">
+                  {analysis ? (
+                    <>
+                      {/* Overall Score */}
+                      <div className="rounded-xl p-6" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                        <div className="flex items-center justify-between">
+                          <div>
+                            <h3 className="text-lg font-semibold" style={{ color: '#FDBA4D' }}>Virality Score</h3>
+                            <p className="text-sm mt-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>Based on X Algorithm prediction factors</p>
+                          </div>
+                          <ScoreRing score={analysis.overall} size={100} strokeWidth={8} />
+                        </div>
+                        <div className="grid grid-cols-4 gap-3 mt-6">
+                          {[
+                            { key: 'engagement', label: 'Engage' },
+                            { key: 'contentQuality', label: 'Quality' },
+                            { key: 'mediaFormat', label: 'Format' },
+                            { key: 'linkHandling', label: 'Links' },
+                            { key: 'timing', label: 'Timing' },
+                            { key: 'safetyRisk', label: 'Safety' },
+                            { key: 'campaignStrategy', label: 'Campaign' }
+                          ].map(({ key, label }) => (
+                            <div key={key} className="text-center">
+                              <ScoreRing score={analysis[key]?.score || 0} size={45} strokeWidth={4} />
+                              <p className="text-xs mt-1" style={{ color: key === 'campaignStrategy' ? '#FFB84A' : '#FFFFFF', opacity: 0.7, fontWeight: key === 'campaignStrategy' ? 600 : 400 }}>{label}</p>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Campaign Warnings */}
+                        {analysis.campaignStrategy?.warnings?.length > 0 && (
+                          <div className="mt-4 rounded-lg p-3" style={{ backgroundColor: '#FF6B6B', border: '3px solid #0E0E0E' }}>
+                            <p className="text-xs font-semibold mb-2" style={{ color: '#0E0E0E' }}>Campaign Warnings</p>
+                            {analysis.campaignStrategy.warnings.map((w, i) => (
+                              <div key={i} className="text-xs mb-1" style={{ color: '#0E0E0E' }}>
+                                - {w.message} | Fix: {w.fix}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Tabs */}
+                      <div className="flex gap-2" style={{ borderBottom: '4px solid #2A2A2A' }}>
+                        {['scores', 'variants', 'strategy'].map(tab => (
+                          <button key={tab} onClick={() => setActiveTab(tab)}
+                            className="px-4 py-2 text-sm font-medium transition-colors capitalize"
+                            style={{
+                              color: activeTab === tab ? '#FFB84A' : '#FFFFFF',
+                              borderBottom: activeTab === tab ? '4px solid #FFB84A' : '4px solid transparent',
+                              marginBottom: '-4px'
+                            }}>
+                            {tab === 'scores' ? 'Analysis' : tab === 'variants' ? 'Optimized' : 'Strategy'}
+                          </button>
+                        ))}
+                      </div>
+
+                      {/* Tab Content */}
+                      <div className="rounded-xl p-4 max-h-[400px] overflow-y-auto" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '12px' }}>
+                        {activeTab === 'scores' && (
+                          <div className="space-y-4">
+                            {Object.entries(analysis).filter(([k]) => k !== 'overall').map(([key, data]) => (
+                              <div key={key}>
+                                <h4 className="text-sm font-medium mb-2 capitalize" style={{ color: key === 'campaignStrategy' ? '#FFB84A' : '#FDBA4D' }}>
+                                  {key === 'campaignStrategy' ? 'Campaign Strategy' : key.replace(/([A-Z])/g, ' $1')}
+                                </h4>
+                                {/* Campaign warnings get special treatment */}
+                                {key === 'campaignStrategy' && data.warnings?.map((w, i) => (
+                                  <div key={`warn-${i}`} className="rounded p-2 mb-1 text-xs" style={{ backgroundColor: '#FF6B6B', border: '2px solid #0E0E0E' }}>
+                                    <span style={{ color: '#0E0E0E', fontWeight: 700 }}>Warning: {w.message}</span>
+                                    <p className="mt-1" style={{ color: '#0E0E0E' }}>Fix: {w.fix}</p>
+                                  </div>
+                                ))}
+                                {data.factors?.map((f, i) => (
+                                  <div key={i} className="rounded p-2 mb-1 text-xs" style={{ backgroundColor: '#2A2A2A' }}>
+                                    <span style={{ color: '#24E0FF' }}>{f.signal}</span>
+                                    <span className="ml-2" style={{ color: f.impact?.startsWith('+') ? '#89D005' : '#FF6B6B' }}>{f.impact}</span>
+                                    <p className="mt-1" style={{ color: '#FFFFFF', opacity: 0.7 }}>{f.reason}</p>
+                                  </div>
+                                ))}
+                                {data.recommendations?.map((r, i) => (
+                                  <div key={i} className="rounded p-2 mb-1 text-xs" style={{ backgroundColor: '#89D005', border: '3px solid #0E0E0E', boxShadow: 'inset 0 2px 111px rgba(0, 0, 0, 0.45)' }}>
+                                    <span style={{ color: '#0E0E0E', fontWeight: 700 }}>{r.action}</span>
+                                    <p className="mt-1" style={{ color: '#0E0E0E' }}>{r.algorithmBenefit}</p>
+                                  </div>
+                                ))}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {activeTab === 'variants' && (
+                          <div className="space-y-3">
+                            {variants.map((v, i) => (
+                              <div key={i} className="rounded-lg p-3" style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E' }}>
+                                <div className="flex justify-between mb-2">
+                                  <span className="text-sm font-medium" style={{ color: '#FDBA4D' }}>{v.type}</span>
+                                  <button onClick={() => handleCopy(v.content)} className="text-xs px-2 py-1 rounded hover:opacity-90" style={{ backgroundColor: '#FFB84A', color: '#0E0E0E', border: '2px solid #0E0E0E' }}>Copy</button>
+                                </div>
+                                <pre className="text-sm whitespace-pre-wrap font-sans p-2 rounded" style={{ backgroundColor: '#0E0E0E', color: '#FFFFFF' }}>{v.content}</pre>
+                                <p className="text-xs mt-2" style={{ color: '#89D005' }}>{v.expectedImpact}</p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                        {activeTab === 'strategy' && (
+                          <div className="space-y-3 text-sm">
+                            {/* Campaign Status */}
+                            <div className="rounded p-3" style={{ backgroundColor: analysis.campaignStrategy?.score >= 80 ? '#89D005' : analysis.campaignStrategy?.score >= 60 ? '#FFB84A' : '#FF6B6B', border: '3px solid #0E0E0E' }}>
+                              <h4 className="font-medium mb-1" style={{ color: '#0E0E0E' }}>Campaign Status</h4>
+                              <p style={{ color: '#0E0E0E' }}>
+                                {analysis.campaignStrategy?.score >= 80 ? 'APPROVED - Ready to post' :
+                                 analysis.campaignStrategy?.score >= 60 ? 'NEEDS ADJUSTMENT - Review warnings' :
+                                 'NOT RECOMMENDED - Fix issues first'}
+                              </p>
+                            </div>
+
+                            {/* Content Tier */}
+                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
+                              <h4 className="font-medium mb-1" style={{ color: '#FDBA4D' }}>Content Tier</h4>
+                              <p style={{ color: '#FFFFFF' }}>
+                                {analysis.campaignStrategy?.factors?.find(f => f.signal === 'Tier 1 Content') ? 'Tier 1 - Anchor Drop (standalone viable)' :
+                                 analysis.campaignStrategy?.factors?.find(f => f.signal === 'Tier 2 Content') ? 'Tier 2 - Supporting Item (pair with anchor)' :
+                                 'General Content'}
+                              </p>
+                            </div>
+
+                            {/* Recommended Day */}
+                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
+                              <h4 className="font-medium mb-1" style={{ color: '#FDBA4D' }}>Recommended Posting Day</h4>
+                              <p style={{ color: '#FFFFFF' }}>
+                                {analysis.campaignStrategy?.factors?.find(f => f.signal === 'Tier 1 Content') ? 'Monday or Tuesday (Anchor slot)' : 'Thursday (Deep Cut) or Saturday (Community)'}
+                              </p>
+                            </div>
+
+                            {/* Timing */}
+                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
+                              <h4 className="font-medium mb-2" style={{ color: '#FDBA4D' }}>Posting Strategy</h4>
+                              <div className="space-y-2 text-xs" style={{ color: '#FFFFFF' }}>
+                                <p>- <span style={{ color: '#FFB84A' }}>5pm EST:</span> Primary post (redemption sync)</p>
+                                <p>- <span style={{ color: '#FFB84A' }}>30-60 min:</span> Follow-up reply (detail/lore)</p>
+                                <p>- <span style={{ color: '#FFB84A' }}>Next day:</span> Quote or reply to reset discovery</p>
+                              </div>
+                            </div>
+
+                            {/* Format Suggestion */}
+                            <div className="rounded p-3" style={{ backgroundColor: '#2A2A2A' }}>
+                              <h4 className="font-medium mb-1" style={{ color: '#FDBA4D' }}>Format Rotation</h4>
+                              <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.8 }}>
+                                Alternate between: Statement, Question-led, Comparison, Lore tease, Mechanics, Prediction
+                              </p>
+                            </div>
+
+                            {/* Core Principle */}
+                            <div className="rounded p-3" style={{ backgroundColor: '#89D005', border: '3px solid #0E0E0E', boxShadow: 'inset 0 2px 111px rgba(0, 0, 0, 0.45)' }}>
+                              <p className="text-xs font-semibold" style={{ color: '#0E0E0E' }}>
+                                "This is not a reveal schedule - it's a narrative system. Treat it that way."
+                              </p>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </>
+                  ) : (
+                    <div className="rounded-xl p-8 text-center" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+                      <div className="text-6xl mb-4" style={{ color: '#FDBA4D' }}>+</div>
+                      <h3 className="text-lg font-semibold mb-2" style={{ color: '#FDBA4D' }}>Enter a post to analyze</h3>
+                      <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.7 }}>Get algorithm-aware recommendations based on the official X recommendation system.</p>
+                      <p className="text-sm mt-4" style={{ color: '#89D005' }}>Tip: Use the Strategy Builder to develop your idea first!</p>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Algorithm Reference Footer */}
+            <div className="mt-8 rounded-xl p-6" style={{ backgroundColor: '#0E0E0E', border: '3px solid #2A2A2A', borderRadius: '16px' }}>
+              <h3 className="text-sm font-semibold mb-4" style={{ color: '#FDBA4D', borderBottom: '4px solid #FFB84A', paddingBottom: '10px' }}>Algorithm Reference (from xai-org/x-algorithm)</h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs" style={{ color: '#FFFFFF' }}>
+                <div>
+                  <h4 className="font-medium mb-2" style={{ color: '#FDBA4D' }}>Prediction Types</h4>
+                  <p style={{ opacity: 0.8 }}>Phoenix model predicts: P(like), P(reply), P(repost), P(quote), P(click), P(profile_click), P(video_view), P(photo_expand), P(share), P(dwell), P(follow_author), and negative signals</p>
+                </div>
+                <div>
+                  <h4 className="font-medium mb-2" style={{ color: '#FDBA4D' }}>Scoring Formula</h4>
+                  <p style={{ opacity: 0.8 }}>Final Score = Σ (weight_i × P(action_i))</p>
+                  <p className="mt-1" style={{ opacity: 0.8 }}>Positive actions have positive weights. Negative actions (block, mute, report) have negative weights.</p>
+                </div>
+                <div>
+                  <h4 className="font-medium mb-2" style={{ color: '#FDBA4D' }}>Key Filters</h4>
+                  <p style={{ opacity: 0.8 }}>AgeFilter, MutedKeywordFilter, VFFilter (spam/violence), RepostDeduplication, AuthorDiversity scorer</p>
+                </div>
+              </div>
+            </div>
+          </main>
+
+          {/* Toast */}
+          {copied && (
+            <div className="fixed bottom-4 right-4 px-4 py-2 rounded-lg animate-pulse" style={{ backgroundColor: '#89D005', color: '#0E0E0E', border: '3px solid #0E0E0E' }}>
+              Copied to clipboard!
+            </div>
+          )}
+        </div>
+      );
+    };
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
