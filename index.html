@@ -1709,131 +1709,135 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
 
     const LearnView = () => {
       const { apiKey } = useOpenAI();
-      const [question, setQuestion] = useState('');
-      const [response, setResponse] = useState(null);
+      const [input, setInput] = useState('');
+      const [messages, setMessages] = useState([
+        { id: 1, text: "Hey! I'm your X Algorithm expert. Ask me anything about how the algorithm works, engagement tactics, reach optimization, or content strategy.\n\nI'll explain things clearly and give you actionable advice based on the xai-org/x-algorithm research.", isUser: false }
+      ]);
+      const [chatHistory, setChatHistory] = useState([
+        { role: 'system', content: SYSTEM_PROMPTS.learnTab }
+      ]);
+      const [isTyping, setIsTyping] = useState(false);
       const [selectedModule, setSelectedModule] = useState(null);
-      const [isLoading, setIsLoading] = useState(false);
+      const chatContainerRef = useRef(null);
 
-      // Format markdown-like text to JSX
-      const formatAnswer = (text) => {
-        return text.split('\n').map((line, i) => {
-          if (line.startsWith('**') && line.endsWith('**')) {
-            return <p key={i} className="font-bold mt-3 mb-1" style={{ color: '#FFB84A' }}>{line.replace(/\*\*/g, '')}</p>;
-          }
-          if (line.includes('**')) {
-            const parts = line.split(/\*\*(.+?)\*\*/g);
-            return (
-              <p key={i} className="text-sm leading-relaxed">
-                {parts.map((part, j) => j % 2 === 1 ? <strong key={j} style={{ color: '#FFB84A' }}>{part}</strong> : part)}
-              </p>
-            );
-          }
-          if (line.startsWith('•') || line.startsWith('-')) return <p key={i} className="text-sm ml-2 leading-relaxed">{line}</p>;
-          if (/^\d+\./.test(line)) return <p key={i} className="text-sm ml-2 leading-relaxed font-medium">{line}</p>;
-          if (!line.trim()) return <div key={i} className="h-2" />;
-          return <p key={i} className="text-sm leading-relaxed">{line}</p>;
-        });
+      useEffect(() => {
+        if (chatContainerRef.current) {
+          chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
+        }
+      }, [messages]);
+
+      const addMessage = (text, isUser = false) => {
+        setMessages(prev => [...prev, { id: Date.now(), text, isUser }]);
       };
 
-      const handleAsk = async () => {
-        if (!question.trim()) return;
-        setIsLoading(true);
+      const handleSend = async () => {
+        if (!input.trim() || isTyping) return;
+        const userInput = input.trim();
+        setInput('');
+        addMessage(userInput, true);
+
+        // Add user message to chat history
+        const newHistory = [...chatHistory, { role: 'user', content: userInput }];
+        setChatHistory(newHistory);
+
+        setIsTyping(true);
 
         try {
           if (apiKey) {
-            // Use real AI
-            const messages = [
-              { role: 'system', content: SYSTEM_PROMPTS.learnTab },
-              { role: 'user', content: question }
-            ];
-            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 1000 });
-            setResponse({ title: 'AI Response', answer: aiResponse, related: [] });
+            // Use real AI with full conversation history
+            const response = await callOpenAI(apiKey, newHistory, { max_tokens: 1000 });
+            addMessage(response);
+            setChatHistory([...newHistory, { role: 'assistant', content: response }]);
           } else {
             // Fallback to knowledge base
-            const result = ALGORITHM_KNOWLEDGE.getResponse(question);
-            result.answer += '\n\n⚠️ *Configure your OpenAI API key for more detailed AI responses!*';
-            setResponse(result);
+            await new Promise(r => setTimeout(r, 500));
+            const result = ALGORITHM_KNOWLEDGE.getResponse(userInput);
+            const fallbackResponse = result.answer + '\n\n⚠️ *Configure your OpenAI API key for better conversational responses!*';
+            addMessage(fallbackResponse);
           }
         } catch (error) {
-          setResponse({ title: 'Error', answer: `Sorry, there was an error: ${error.message}`, related: [] });
+          addMessage(`Sorry, there was an error: ${error.message}\n\nPlease check your API key and try again.`);
         }
 
-        setIsLoading(false);
+        setIsTyping(false);
       };
 
       const handleQuickQuestion = async (q) => {
-        setQuestion(q);
-        setIsLoading(true);
+        if (isTyping) return;
+        setInput('');
+        addMessage(q, true);
+
+        const newHistory = [...chatHistory, { role: 'user', content: q }];
+        setChatHistory(newHistory);
+
+        setIsTyping(true);
 
         try {
           if (apiKey) {
-            const messages = [
-              { role: 'system', content: SYSTEM_PROMPTS.learnTab },
-              { role: 'user', content: q }
-            ];
-            const aiResponse = await callOpenAI(apiKey, messages, { max_tokens: 1000 });
-            setResponse({ title: 'AI Response', answer: aiResponse, related: [] });
+            const response = await callOpenAI(apiKey, newHistory, { max_tokens: 1000 });
+            addMessage(response);
+            setChatHistory([...newHistory, { role: 'assistant', content: response }]);
           } else {
+            await new Promise(r => setTimeout(r, 500));
             const result = ALGORITHM_KNOWLEDGE.getResponse(q);
-            setResponse(result);
+            addMessage(result.answer);
           }
         } catch (error) {
-          setResponse({ title: 'Error', answer: `Sorry, there was an error: ${error.message}`, related: [] });
+          addMessage(`Sorry, there was an error: ${error.message}`);
         }
 
-        setIsLoading(false);
+        setIsTyping(false);
       };
 
-      const handleRelatedClick = async (topic) => {
-        setQuestion(topic);
-        handleQuickQuestion(topic);
+      const handleReset = () => {
+        setMessages([
+          { id: 1, text: "Fresh start! What would you like to learn about the X algorithm?", isUser: false }
+        ]);
+        setChatHistory([{ role: 'system', content: SYSTEM_PROMPTS.learnTab }]);
       };
 
       return (
         <div className="space-y-6">
           {/* Conversational Q&A Section - First */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Ask a Question - Larger area */}
-            <div className="lg:col-span-2 rounded-xl p-5" style={{ backgroundColor: '#0E0E0E', border: '3px solid #24E0FF', borderRadius: '16px' }}>
-              <h3 className="text-lg font-semibold mb-4" style={{ color: '#24E0FF', borderBottom: '4px solid #24E0FF', paddingBottom: '10px' }}>Ask Me Anything About the X Algorithm</h3>
-
-              <div className="flex gap-2 mb-4">
-                <input
-                  type="text"
-                  value={question}
-                  onChange={(e) => setQuestion(e.target.value)}
-                  onKeyPress={(e) => e.key === 'Enter' && !isLoading && handleAsk()}
-                  placeholder="e.g., 'explain repetitive posting patterns' or 'how do links affect reach?'"
-                  className="flex-1 rounded-lg px-4 py-3 text-sm"
-                  style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
-                  disabled={isLoading}
-                />
-                <button
-                  onClick={handleAsk}
-                  disabled={isLoading}
-                  className="px-6 py-3 rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50"
-                  style={{ backgroundColor: '#24E0FF', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
-                >
-                  {isLoading ? '...' : 'Ask'}
+            {/* Chat Area - Larger area */}
+            <div className="lg:col-span-2 rounded-xl flex flex-col h-[500px]" style={{ backgroundColor: '#0E0E0E', border: '3px solid #24E0FF', borderRadius: '16px' }}>
+              {/* Header */}
+              <div className="p-4 flex justify-between items-center" style={{ borderBottom: '4px solid #24E0FF' }}>
+                <div>
+                  <h3 className="text-lg font-semibold" style={{ color: '#24E0FF' }}>Learn the X Algorithm</h3>
+                  <p className="text-xs" style={{ color: '#FFFFFF', opacity: 0.7 }}>
+                    {apiKey ? 'AI-powered Q&A' : 'Configure API key for AI responses'}
+                  </p>
+                </div>
+                <button onClick={handleReset} className="text-xs hover:opacity-80 px-3 py-1 rounded" style={{ color: '#FFFFFF', backgroundColor: '#2A2A2A' }}>
+                  Clear Chat
                 </button>
               </div>
 
+              {/* Chat Messages */}
+              <div ref={chatContainerRef} className="flex-1 overflow-y-auto p-4 space-y-3">
+                {messages.map(msg => (
+                  <ChatMessage key={msg.id} message={msg.text} isUser={msg.isUser} />
+                ))}
+                {isTyping && <ChatMessage isTyping={true} />}
+              </div>
+
               {/* Quick Questions */}
-              <div className="mb-4">
-                <p className="text-xs mb-2" style={{ color: '#FFFFFF', opacity: 0.5 }}>Try asking about:</p>
+              <div className="px-4 py-2" style={{ borderTop: '2px solid #2A2A2A' }}>
+                <p className="text-xs mb-2" style={{ color: '#FFFFFF', opacity: 0.5 }}>Quick questions:</p>
                 <div className="flex flex-wrap gap-2">
                   {[
-                    'repetitive posting patterns',
-                    'how to maximize reach',
-                    'link penalties',
-                    'engagement velocity',
-                    'spam triggers',
-                    'best post length'
+                    'How does scoring work?',
+                    'Link penalties?',
+                    'Best post length?',
+                    'Engagement velocity?'
                   ].map((q, i) => (
                     <button
                       key={i}
                       onClick={() => handleQuickQuestion(q)}
-                      className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
+                      disabled={isTyping}
+                      className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80 disabled:opacity-50"
                       style={{ backgroundColor: '#2A2A2A', color: '#FFFFFF', border: '2px solid #3A3A3A' }}
                     >
                       {q}
@@ -1842,40 +1846,32 @@ Avoid web3/crypto terminology even if game-adjacent. Keep language mainstream-fr
                 </div>
               </div>
 
-              {/* Response Area */}
-              {response ? (
-                <div className="rounded-lg p-4" style={{ backgroundColor: '#1A1A1A', border: '2px solid #24E0FF' }}>
-                  <div className="flex items-center gap-2 mb-3 pb-2" style={{ borderBottom: '2px solid #2A2A2A' }}>
-                    <div className="w-3 h-3 rounded-full" style={{ backgroundColor: '#24E0FF' }}></div>
-                    <h4 className="font-semibold" style={{ color: '#24E0FF' }}>{response.title}</h4>
-                  </div>
-                  <div className="text-white max-h-80 overflow-y-auto pr-2">
-                    {formatAnswer(response.answer)}
-                  </div>
-                  {response.related && response.related.length > 0 && (
-                    <div className="mt-4 pt-3" style={{ borderTop: '2px solid #2A2A2A' }}>
-                      <p className="text-xs mb-2" style={{ color: '#FFFFFF', opacity: 0.5 }}>Related topics:</p>
-                      <div className="flex flex-wrap gap-2">
-                        {response.related.map((topic, i) => (
-                          <button
-                            key={i}
-                            onClick={() => handleRelatedClick(topic)}
-                            className="text-xs px-3 py-1.5 rounded-lg hover:opacity-80"
-                            style={{ backgroundColor: '#24E0FF', color: '#0E0E0E', fontWeight: 500 }}
-                          >
-                            {topic}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                  )}
+              {/* Input Area */}
+              <div className="p-4" style={{ borderTop: '2px solid #2A2A2A' }}>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={input}
+                    onChange={(e) => setInput(e.target.value)}
+                    onKeyPress={(e) => e.key === 'Enter' && !isTyping && handleSend()}
+                    placeholder="Ask about the X algorithm..."
+                    className="flex-1 rounded-lg px-4 py-3 text-sm"
+                    style={{ backgroundColor: '#2A2A2A', border: '3px solid #0E0E0E', color: '#FFFFFF' }}
+                    disabled={isTyping}
+                  />
+                  <button
+                    onClick={handleSend}
+                    disabled={isTyping || !input.trim()}
+                    className="px-6 py-3 rounded-lg text-sm font-semibold hover:opacity-90 disabled:opacity-50 flex items-center gap-2"
+                    style={{ backgroundColor: '#24E0FF', color: '#0E0E0E', border: '3px solid #0E0E0E' }}
+                  >
+                    {isTyping && (
+                      <div className="animate-spin w-4 h-4 border-2 border-t-transparent rounded-full" style={{ borderColor: '#0E0E0E', borderTopColor: 'transparent' }}></div>
+                    )}
+                    {isTyping ? '...' : 'Ask'}
+                  </button>
                 </div>
-              ) : (
-                <div className="rounded-lg p-6 text-center" style={{ backgroundColor: '#1A1A1A', border: '2px dashed #2A2A2A' }}>
-                  <p className="text-sm" style={{ color: '#FFFFFF', opacity: 0.5 }}>Ask a question to learn about the X algorithm</p>
-                  <p className="text-xs mt-1" style={{ color: '#FFFFFF', opacity: 0.3 }}>I can explain scoring, reach, engagement tactics, content strategy, and more</p>
-                </div>
-              )}
+              </div>
             </div>
 
             {/* Key Principles - Sidebar */}
