@@ -2,39 +2,15 @@
   "name": "x-post-optimizer",
   "version": "1.0.0",
   "description": "Algorithm-aware X (Twitter) post optimization app based on xai-org/x-algorithm",
-  "main": "index.html",
-  "type": "module",
-  "scripts": {
-    "start": "npx serve .",
-    "dev": "npx serve . -l 3000",
-    "test": "node --test lib/*.test.js"
-  },
+  "private": true,
   "keywords": [
     "twitter",
     "x",
     "algorithm",
     "optimization",
     "social-media",
-    "critters-quest",
-    "web3"
+    "critters-quest"
   ],
   "author": "Critters Quest",
-  "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/xai-org/x-algorithm"
-  },
-  "dependencies": {
-    "autoprefixer": "^10.4.23",
-    "lucide-react": "^0.562.0",
-    "next": "^16.1.4",
-    "postcss": "^8.5.6",
-    "react": "^19.2.3",
-    "react-dom": "^19.2.3",
-    "tailwindcss": "^4.1.18",
-    "uuid": "^13.0.0"
-  },
-  "engines": {
-    "node": ">=18.0.0"
-  }
+  "license": "MIT"
 }
